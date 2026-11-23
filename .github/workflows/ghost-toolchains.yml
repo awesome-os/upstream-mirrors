@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        stack: [zig-0.14.0, ninja-1.12.1, xwin-winsdk]
+        stack: [zig-0.14.0, ninja-1.12.1, xwin-winsdk, llvm-23.1.6-ir]
     steps:
       - name: Build Hermetic Ghost Stack (${{ matrix.stack }})
         env:
@@ -51,6 +51,26 @@ jobs:
             XWIN=/tmp/work/xwin-0.10.0-x86_64-unknown-linux-musl/xwin
             "$XWIN" --accept-license --arch x86_64 splat --output /tmp/work/winsdk-x64 --preserve-ms-arch-notation
             tar -I 'zstd -T0 -9' -cf dist/ghost-winsdk-msvc-x64.tar.zst -C /tmp/work/winsdk-x64 .
+          elif [ "$STACK" = "llvm-23.1.6-ir" ]; then
+            # Full Clang + LLD + WASM + LLVM IR stack (strips only lldb/flang/mlir/polly/static .a bloat)
+            mkdir -p /tmp/work/llvm-lin /tmp/work/llvm-lin-slim/bin /tmp/work/llvm-lin-slim/lib
+            curl -fsSL https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/LLVM-23.1.6-Linux-X64.tar.zst | tar --zstd -xf - -C /tmp/work/llvm-lin --strip-components=1
+            for pat in 'clang*' 'lld*' 'ld.lld*' 'ld64.lld*' 'wasm-ld*' 'opt*' 'llc*' 'lli*' 'llvm-*'; do
+              cp -a /tmp/work/llvm-lin/bin/$pat /tmp/work/llvm-lin-slim/bin/ 2>/dev/null || true
+            done
+            cp -a /tmp/work/llvm-lin/lib/clang /tmp/work/llvm-lin-slim/lib/ 2>/dev/null || true
+            cp -a /tmp/work/llvm-lin/lib/libLLVM*.so* /tmp/work/llvm-lin/lib/libclang*.so* /tmp/work/llvm-lin/lib/libLTO*.so* /tmp/work/llvm-lin-slim/lib/ 2>/dev/null || true
+            tar -I 'zstd -T0 -9' -cf dist/ghost-llvm-23.1.6-full-linux-x64.tar.zst -C /tmp/work/llvm-lin-slim .
+            rm -rf /tmp/work/llvm-lin /tmp/work/llvm-lin-slim
+
+            mkdir -p /tmp/work/llvm-win /tmp/work/llvm-win-slim/bin /tmp/work/llvm-win-slim/lib
+            curl -fsSL https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/clang+llvm-23.1.6-x86_64-pc-windows-msvc.tar.zst | tar --zstd -xf - -C /tmp/work/llvm-win --strip-components=1
+            for pat in 'clang*' 'lld*' 'ld.lld*' 'ld64.lld*' 'wasm-ld*' 'opt*' 'llc*' 'lli*' 'llvm-*' '*.dll'; do
+              cp -a /tmp/work/llvm-win/bin/$pat /tmp/work/llvm-win-slim/bin/ 2>/dev/null || true
+            done
+            cp -a /tmp/work/llvm-win/lib/clang /tmp/work/llvm-win-slim/lib/ 2>/dev/null || true
+            tar -I 'zstd -T0 -9' -cf dist/ghost-llvm-23.1.6-full-win64.tar.zst -C /tmp/work/llvm-win-slim .
+            rm -rf /tmp/work/llvm-win /tmp/work/llvm-win-slim
           fi
 
           (cd dist && sha256sum * > "SHA256SUMS-toolchain-${STACK}.txt")

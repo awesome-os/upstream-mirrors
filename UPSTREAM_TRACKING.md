@@ -71,6 +71,7 @@ Hosted CI runners (`windows-2022`, `ubuntu-latest`) routinely lag behind bleedin
 | Ghost Toolchain Pack (`v0.1.0-ghost-toolchains`) | Contents | Replaces |
 | :--- | :--- | :--- |
 | **`ghost-zig-0.14.0`** (`linux-x64`, `win64`, `macos-arm64`) | Self-contained Clang/LLVM + LLD + glibc/musl/Win32/macOS/WASI sysroots | Host GCC/Clang, MinGW, CMake, Make, `apt-get` |
+| **`ghost-llvm-23.1.6-ir`** (`linux-x64`, `win64`, tree-shaken `.tar.zst`) | Lean polyglot LLVM IR backend (`opt`, `llc`, `llvm-link`, `clang-cl`, `lld-link`, `wasm-ld`) — strips `lldb`/`flang`/`mlir`/static `.a` bloat | Monolithic LLVM installs & polyglot IR backends (Rust/Swift/Zig/Kotlin/C++) |
 | **`ghost-winsdk-msvc-x64`** (`xwin 0.10.0`, `.tar.zst`) | Hermetic Windows SDK + UCRT + MSVC CRT headers & import libs | Runner-installed Windows SDK / Visual Studio drift |
 | **`ghost-ninja-1.12.1`** (`linux-x64`, `win64`, `macos`) | Minimal static legacy bridge (tree-shaken out as `holo-compiler` native recipes expand) | Ambient host Ninja / Make |
 | **`ghost-toolchains-manifest.json`** | Unified SHA-256 + CAS key index for `holo-compiler` | Ad-hoc runner setup actions |
