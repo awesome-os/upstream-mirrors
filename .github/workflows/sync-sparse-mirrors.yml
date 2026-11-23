@@ -1,0 +1,90 @@
+name: Sync Sparse Debloated Upstream Mirrors
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * 0'
+
+permissions:
+  contents: write
+
+jobs:
+  sync-sparse-branches:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sparse-Clone & Commit Clean Stripped Trees to mirror/<name> Branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          sync_sparse() {
+            NAME="$1"
+            URL="$2"
+            BRANCH="mirror/${NAME}"
+            WORK="/tmp/mirror-${NAME}"
+            rm -rf "$WORK"
+            echo "=== Syncing sparse ${NAME} from ${URL} -> ${BRANCH} ==="
+            git clone --depth=1 --filter=blob:none --no-checkout "$URL" "$WORK"
+            git -C "$WORK" sparse-checkout init --no-cone
+            cat << 'EOF' > "$WORK/.git/info/sparse-checkout"
+          /*
+          !/test/
+          !/tests/
+          !/testing/
+          !/fuzz/
+          !/fuzzer/
+          !/doc/
+          !/docs/
+          !/bench/
+          !/benchmark/
+          !/benchmarks/
+          !/examples/
+          !/java/
+          !/python/
+          !/go/
+          !/rust/
+          !/research/
+          !/.github/
+          EOF
+            git -C "$WORK" checkout --quiet HEAD
+            UP_SHA=$(git -C "$WORK" rev-parse --short HEAD)
+            rm -rf "$WORK/.git"
+            FILES=$(find "$WORK" -type f | wc -l)
+            SIZE=$(du -sh "$WORK" | awk '{print $1}')
+
+            git checkout --orphan "$BRANCH"
+            git rm -rf . >/dev/null 2>&1 || true
+            cp -a "$WORK"/. .
+            git add -A
+            git commit -q -m "mirror(${NAME}): sparse stripped snapshot @ ${UP_SHA} (${FILES} files, ${SIZE})"
+            git push --force origin "$BRANCH"
+            echo "  -> Pushed ${BRANCH} @ ${UP_SHA} (${FILES} files, ${SIZE})"
+            echo "{\"name\":\"${NAME}\",\"branch\":\"${BRANCH}\",\"upstream_url\":\"${URL}\",\"upstream_sha\":\"${UP_SHA}\",\"files\":${FILES},\"size\":\"${SIZE}\"}" >> /tmp/mirror-rows.jsonl
+            git checkout main
+          }
+
+          rm -f /tmp/mirror-rows.jsonl
+          sync_sparse boringssl     https://boringssl.googlesource.com/boringssl
+          sync_sparse brotli        https://github.com/google/brotli.git
+          sync_sparse libwebp       https://chromium.googlesource.com/webm/libwebp
+          sync_sparse zlib-ng       https://github.com/zlib-ng/zlib-ng.git
+          sync_sparse libpng        https://github.com/pnggroup/libpng.git
+          sync_sparse freetype      https://gitlab.freedesktop.org/freetype/freetype.git
+          sync_sparse harfbuzz      https://github.com/harfbuzz/harfbuzz.git
+          sync_sparse libjpeg-turbo https://github.com/libjpeg-turbo/libjpeg-turbo.git
+          sync_sparse expat         https://github.com/libexpat/libexpat.git
+
+          node -e "
+            const fs = require('fs');
+            const rows = fs.readFileSync('/tmp/mirror-rows.jsonl', 'utf8').trim().split('\n').map(l => JSON.parse(l));
+            fs.writeFileSync('mirror-index.json', JSON.stringify({ schema: 'awesome-os-sparse-mirrors-v1', updated_at: new Date().toISOString(), mirrors: rows }, null, 2) + '\n');
+          "
+          cat mirror-index.json
+          git add mirror-index.json
+          git diff --cached --quiet || (git commit -m "chore: update mirror-index.json for 9 sparse upstream mirrors" && git push origin main)
