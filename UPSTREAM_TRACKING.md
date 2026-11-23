@@ -61,3 +61,23 @@
 [semantic-diff] shard=boringssl headers=106 blobChanged=1 abiChanged=1 implChanged=1 -> ABI_BREAK_REBUILD
 [semantic-diff] shard=brotli    headers=5   blobChanged=0 abiChanged=0 implChanged=0 -> IDENTICAL
 ```
+
+---
+
+## 4. Ghost Build Stacks & Zero-CMake `holo-compiler` 4-OS Cross-Compilation
+
+Hosted CI runners (`windows-2022`, `ubuntu-latest`) routinely lag behind bleeding-edge SDKs (e.g., Windows SDK `10.0.26100.0` vs upstream V8's `10.0.28000.0`). To eliminate ambient runner drift and replace legacy CMake/Ninja/Make/MSVC pipelines system-wide, **build stacks themselves are packaged as content-addressed Ghost Toolchain Packs** inside `awesome-os/upstream-mirrors` and lazily hydrated by `holo-compiler` via SHA-256 CAS:
+
+| Ghost Toolchain Pack (`v0.1.0-ghost-toolchains`) | Contents | Replaces |
+| :--- | :--- | :--- |
+| **`ghost-zig-0.14.0`** (`linux-x64`, `win64`, `macos-arm64`) | Self-contained Clang/LLVM + LLD + glibc/musl/Win32/macOS/WASI sysroots | Host GCC/Clang, MinGW, CMake, Make, `apt-get` |
+| **`ghost-winsdk-msvc-x64`** (`xwin 0.10.0`, `.tar.zst`) | Hermetic Windows SDK + UCRT + MSVC CRT headers & import libs | Runner-installed Windows SDK / Visual Studio drift |
+| **`ghost-ninja-1.12.1`** (`linux-x64`, `win64`, `macos`) | Minimal static legacy bridge (tree-shaken out as `holo-compiler` native recipes expand) | Ambient host Ninja / Make |
+| **`ghost-toolchains-manifest.json`** | Unified SHA-256 + CAS key index for `holo-compiler` | Ad-hoc runner setup actions |
+
+### Zero-CMake / Zero-Ninja 4-OS Shards (`v0.1.0-holo-4os`)
+
+Pure `holo-compiler` (`zig cc`) compiles directly from sparse `mirror/*` branches into **4 OS native shared libraries** (`Win64 .dll`, `Linux x64 .so`, `Linux ARM64 .so`, `Darwin ARM64 .dylib`) from a single `ubuntu-latest` runner with zero CMake, zero Ninja, zero Make, and zero `apt-get`:
+
+- **Live 4-OS Engines:** `libbrotli`, `libexpat`, `libsqlite3`, `libwebp` -> `16` cross-compiled shared libraries + unified `ghost-4os-manifest.json`.
+

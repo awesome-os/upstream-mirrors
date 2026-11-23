@@ -84,7 +84,8 @@ jobs:
               '#endif' \
               '#endif' > /tmp/expat_inc/expat_config.h
             compile_4os libexpat -I/tmp/expat_inc -Isrc/expat/lib -DHAVE_EXPAT_CONFIG_H -DXML_ENABLE_VISIBILITY=1 \
-              src/expat/lib/xmlparse.c src/expat/lib/xmlrole.c src/expat/lib/xmltok.c
+              src/expat/lib/xmlparse.c src/expat/lib/xmlrole.c src/expat/lib/xmltok.c src/expat/lib/xcs.c \
+              src/expat/lib/random_rand_s.c src/expat/lib/random_arc4random_buf.c src/expat/lib/random_getrandom.c
           elif [ "$ENGINE" = "sqlite3" ]; then
             mkdir -p /tmp/sq
             curl -fsSL https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip -o /tmp/sq/sq.zip
