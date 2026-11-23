@@ -1,0 +1,121 @@
+name: Holo 4-OS Shards — Zero-CMake / Zero-Ninja Pure Zig Cross-Compiler
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag for 4-OS zero-CMake shared libraries'
+        required: true
+        default: 'v0.1.0-holo-4os'
+
+permissions:
+  contents: write
+
+jobs:
+  ensure-release:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || 'v0.1.0-holo-4os' }}
+        run: |
+          gh release view "$TAG" --repo awesome-os/upstream-mirrors >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo awesome-os/upstream-mirrors \
+              --title "Holo 4-OS Shards (${TAG}) — Zero-CMake / Zero-Ninja Cross-Compiled" \
+              --notes "100% pure \`zig cc\` cross-compiled shared libraries (Win64 \`.dll\`, Linux x64/ARM64 \`.so\`, Darwin ARM64 \`.dylib\`) directly from sparse \`mirror/*\` branches — zero CMake, zero Ninja, zero Make, zero apt-get."
+
+  build-4os-shard:
+    needs: ensure-release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [brotli, expat, sqlite3, libwebp]
+    steps:
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - name: Checkout Sparse Mirror Branch (if mirror-backed)
+        if: matrix.engine != 'sqlite3'
+        uses: actions/checkout@v4
+        with:
+          ref: mirror/${{ matrix.engine }}
+          path: src
+
+      - name: Compile ${{ matrix.engine }} for 4 OS Targets (Zero CMake / Zero Ninja)
+        env:
+          ENGINE: ${{ matrix.engine }}
+        run: |
+          mkdir -p dist
+          compile_4os() {
+            LIB="$1"
+            shift
+            echo "=== Compiling ${LIB} for 4 OS targets via pure zig cc ==="
+            zig cc -target x86_64-windows-gnu -O2 -shared -s "$@" -o "dist/${LIB}-win64.dll" "-Wl,--out-implib,dist/${LIB}-win64.dll.a"
+            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${LIB}-linux-x64.so"
+            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${LIB}-linux-arm64.so"
+            zig cc -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${LIB}-macos-arm64.dylib"
+          }
+
+          if [ "$ENGINE" = "brotli" ]; then
+            SRCS=$(find src/c/common src/c/dec src/c/enc -name '*.c' | sort)
+            compile_4os libbrotli -Isrc/c/include $SRCS -lm
+          elif [ "$ENGINE" = "expat" ]; then
+            compile_4os libexpat -Isrc/expat/lib -DXML_GE=1 -DXML_ENABLE_VISIBILITY=1 -DXML_DTD -DXML_NS -DXML_CONTEXT_BYTES=1024 \
+              src/expat/lib/xmlparse.c src/expat/lib/xmlrole.c src/expat/lib/xmltok.c
+          elif [ "$ENGINE" = "sqlite3" ]; then
+            mkdir -p /tmp/sq
+            curl -fsSL https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip -o /tmp/sq/sq.zip
+            unzip -q /tmp/sq/sq.zip -d /tmp/sq
+            SQ_C=$(find /tmp/sq -maxdepth 2 -name sqlite3.c | head -n 1)
+            compile_4os libsqlite3 -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=1 "$SQ_C"
+          elif [ "$ENGINE" = "libwebp" ]; then
+            SRCS=$(find src/src/dec src/src/dsp src/src/enc src/src/utils src/src/demux src/sharpyuv -name '*.c' | sort)
+            compile_4os libwebp -Isrc -Isrc/src -DWEBP_DLL $SRCS -lm
+          fi
+
+          (cd dist && sha256sum * > "SHA256SUMS-${ENGINE}-4os.txt")
+          ls -lh dist/
+
+      - name: Upload 4-OS Shard Binaries to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || 'v0.1.0-holo-4os' }}
+        run: gh release upload "$TAG" dist/* --repo awesome-os/upstream-mirrors --clobber
+
+  emit-4os-ghost-manifest:
+    needs: build-4os-shard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Emit Unified 4-OS GhostModuleRegistry Manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || 'v0.1.0-holo-4os' }}
+        run: |
+          mkdir -p /tmp/sums
+          gh release download "$TAG" --repo awesome-os/upstream-mirrors --pattern "SHA256SUMS-*-4os.txt" --dir /tmp/sums --clobber
+          node -e "
+            const fs = require('fs');
+            const path = require('path');
+            const tag = process.env.TAG;
+            const entries = [];
+            for (const f of fs.readdirSync('/tmp/sums').sort()) {
+              for (const line of fs.readFileSync(path.join('/tmp/sums', f), 'utf8').trim().split('\n')) {
+                const [sha256, filename] = line.trim().split(/\s+/);
+                if (!sha256 || !filename || filename.endsWith('.dll.a')) continue;
+                entries.push({
+                  filename,
+                  sha256,
+                  download_url: 'https://github.com/awesome-os/upstream-mirrors/releases/download/' + tag + '/' + filename
+                });
+              }
+            }
+            const manifest = { schema: 'b8g-ghost-registry-4os-v1', compiler: 'holo-compiler (zig cc 0.14.0, zero cmake/ninja)', tag, total_libs: entries.length, libs: entries };
+            fs.writeFileSync('/tmp/ghost-4os-manifest.json', JSON.stringify(manifest, null, 2) + '\n');
+            console.log('[holo-4os] Published ghost-4os-manifest.json with', entries.length, 'cross-compiled 4-OS shared libraries');
+          "
+          gh release upload "$TAG" /tmp/ghost-4os-manifest.json --repo awesome-os/upstream-mirrors --clobber
