@@ -54,7 +54,7 @@ jobs:
           elif [ "$STACK" = "llvm-23.1.6-ir" ]; then
             # Full Clang + LLD + WASM + LLVM IR stack (strips only lldb/flang/mlir/polly/static .a bloat)
             mkdir -p /tmp/work/llvm-lin /tmp/work/llvm-lin-slim/bin /tmp/work/llvm-lin-slim/lib
-            curl -fsSL https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/LLVM-23.1.6-Linux-X64.tar.zst | tar --zstd -xf - -C /tmp/work/llvm-lin --strip-components=1
+            curl -fsSL https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/LLVM-23.1.6-Linux-X64.tar.zst | zstd -d --long=31 | tar -xf - -C /tmp/work/llvm-lin --strip-components=1
             for pat in 'clang*' 'lld*' 'ld.lld*' 'ld64.lld*' 'wasm-ld*' 'opt*' 'llc*' 'lli*' 'llvm-*'; do
               cp -a /tmp/work/llvm-lin/bin/$pat /tmp/work/llvm-lin-slim/bin/ 2>/dev/null || true
             done
@@ -64,7 +64,7 @@ jobs:
             rm -rf /tmp/work/llvm-lin /tmp/work/llvm-lin-slim
 
             mkdir -p /tmp/work/llvm-win /tmp/work/llvm-win-slim/bin /tmp/work/llvm-win-slim/lib
-            curl -fsSL https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/clang+llvm-23.1.6-x86_64-pc-windows-msvc.tar.zst | tar --zstd -xf - -C /tmp/work/llvm-win --strip-components=1
+            curl -fsSL https://github.com/llvm/llvm-project/releases/download/llvmorg-23.1.6/clang+llvm-23.1.6-x86_64-pc-windows-msvc.tar.zst | zstd -d --long=31 | tar -xf - -C /tmp/work/llvm-win --strip-components=1
             for pat in 'clang*' 'lld*' 'ld.lld*' 'ld64.lld*' 'wasm-ld*' 'opt*' 'llc*' 'lli*' 'llvm-*' '*.dll'; do
               cp -a /tmp/work/llvm-win/bin/$pat /tmp/work/llvm-win-slim/bin/ 2>/dev/null || true
             done
