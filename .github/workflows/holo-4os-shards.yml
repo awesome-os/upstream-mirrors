@@ -60,9 +60,31 @@ jobs:
 
           if [ "$ENGINE" = "brotli" ]; then
             SRCS=$(find src/c/common src/c/dec src/c/enc -name '*.c' | sort)
-            compile_4os libbrotli -Isrc/c/include $SRCS -lm
+            compile_4os libbrotli -Isrc/c/include -Isrc/c -DBROTLI_SHARED_COMPILATION -DBROTLI_BUILD_COMMON_LIBRARY -DBROTLI_BUILD_DECODER_LIBRARY -DBROTLI_BUILD_ENCODER_LIBRARY $SRCS -lm
           elif [ "$ENGINE" = "expat" ]; then
-            compile_4os libexpat -Isrc/expat/lib -DXML_GE=1 -DXML_ENABLE_VISIBILITY=1 -DXML_DTD -DXML_NS -DXML_CONTEXT_BYTES=1024 \
+            mkdir -p /tmp/expat_inc
+            cat > /tmp/expat_inc/expat_config.h <<'EOF'
+#ifndef EXPAT_CONFIG_H
+#define EXPAT_CONFIG_H
+#define BYTEORDER 1234
+#define HAVE_MEMMOVE 1
+#define HAVE_STDINT_H 1
+#define HAVE_STDLIB_H 1
+#define HAVE_STRING_H 1
+#define XML_NS 1
+#define XML_DTD 1
+#define XML_GE 1
+#define XML_CONTEXT_BYTES 1024
+#if defined(_WIN32)
+#define HAVE_RAND_S 1
+#elif defined(__APPLE__)
+#define HAVE_ARC4RANDOM_BUF 1
+#else
+#define HAVE_GETRANDOM 1
+#endif
+#endif
+EOF
+            compile_4os libexpat -I/tmp/expat_inc -Isrc/expat/lib -DHAVE_EXPAT_CONFIG_H -DXML_ENABLE_VISIBILITY=1 \
               src/expat/lib/xmlparse.c src/expat/lib/xmlrole.c src/expat/lib/xmltok.c
           elif [ "$ENGINE" = "sqlite3" ]; then
             mkdir -p /tmp/sq
