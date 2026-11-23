@@ -47,8 +47,8 @@ jobs:
             curl -fsSL https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-win.zip -o dist/ghost-ninja-1.12.1-win64.zip
             curl -fsSL https://github.com/ninja-build/ninja/releases/download/v1.12.1/ninja-mac.zip -o dist/ghost-ninja-1.12.1-macos.zip
           elif [ "$STACK" = "xwin-winsdk" ]; then
-            curl -fsSL https://github.com/Jake-Shadle/xwin/releases/download/0.6.6/xwin-0.6.6-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /tmp/work
-            XWIN=/tmp/work/xwin-0.6.6-x86_64-unknown-linux-musl/xwin
+            curl -fsSL https://github.com/Jake-Shadle/xwin/releases/download/0.10.0/xwin-0.10.0-x86_64-unknown-linux-musl.tar.gz | tar -xz -C /tmp/work
+            XWIN=/tmp/work/xwin-0.10.0-x86_64-unknown-linux-musl/xwin
             "$XWIN" --accept-license --arch x86_64 splat --output /tmp/work/winsdk-x64 --preserve-ms-arch-notation
             tar -I 'zstd -T0 -9' -cf dist/ghost-winsdk-msvc-x64.tar.zst -C /tmp/work/winsdk-x64 .
           fi
