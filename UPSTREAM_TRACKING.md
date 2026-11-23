@@ -50,8 +50,8 @@
 
 | Release Tag | Contents | Live Verification |
 | :--- | :--- | :--- |
-| **[`v0.6.0-baseline`](https://github.com/awesome-os/sectium-browser/releases/tag/v0.6.0-baseline)** | **36 verified assets**: `RollingReleaseManifest.json` (`b8g-ghost` aligned), Lumi White Dragon brand pack, 4-OS `b8g-ghost`, 4-OS `b8g-shim`, 5-OS `libsectium_display`, 8 Win32 `gui-shells`, cloud V8 `eaf3708a`, `ghost-shards-manifest.json` | `21s` GREEN (`45267995649`) |
-| **[`v0.6.0-v8-cloud`](https://github.com/awesome-os/sectium-browser/releases/tag/v0.6.0-v8-cloud)** | Fresh cloud-compiled upstream V8 (`eaf3708a`): `v8-shared-linux-x64.tar.gz` (`libv8.so`, `libv8_libbase.so`, `libv8_libplatform.so`) + `v8-include-eaf3708a.tar.gz` | `48m 05s` GREEN (`45250990278`) |
+| **[`v0.6.1-baseline`](https://github.com/awesome-os/sectium-browser/releases/tag/v0.6.1-baseline)** | **39 verified assets**: `RollingReleaseManifest.json` (`previous_tag: v0.6.0-baseline`), cloud **Win64 `v8.dll` + Linux `libv8.so`**, `ghost-toolchains-manifest.json`, `ghost-4os-manifest.json`, `ghost-shards-manifest.json`, Lumi White Dragon brand pack, 4-OS `b8g-ghost`, 4-OS `b8g-shim`, 5-OS `libsectium_display`, 8 Win32 `gui-shells` | `~25s` GREEN (`45291574155`) |
+| **[`v0.6.0-v8-cloud`](https://github.com/awesome-os/sectium-browser/releases/tag/v0.6.0-v8-cloud)** | Fresh cloud-compiled upstream V8 (`eaf3708a`): **`v8-shared-win64.zip`** (`v8.dll`, `v8_libbase.dll`, `v8_libplatform.dll`) + **`v8-shared-linux-x64.tar.gz`** (`libv8.so`, `libv8_libbase.so`, `libv8_libplatform.so`) + `v8-include-eaf3708a.tar.gz` | Linux `48m 05s` (`45250990278`) & Win64 `58m 32s` (`45273165395`) GREEN |
 | **[`v0.6.0-chromium-shards`](https://github.com/awesome-os/sectium-browser/releases/tag/v0.6.0-chromium-shards)** | **10/10 parallel shards (`31` assets)**: `BoringSSL`, `Brotli`, `libwebp`, `zlib-ng`, `libpng18`, `SQLite3`, `FreeType`, `HarfBuzz`, `libjpeg-turbo`, `Expat` + unified `ghost-shards-manifest.json` | `~2m` GREEN (`45168854440`) |
 
 ### Latest Live Semantic AST Diff Gate Run (`45268965479` — GREEN)
@@ -68,17 +68,17 @@
 
 Hosted CI runners (`windows-2022`, `ubuntu-latest`) routinely lag behind bleeding-edge SDKs (e.g., Windows SDK `10.0.26100.0` vs upstream V8's `10.0.28000.0`). To eliminate ambient runner drift and replace legacy CMake/Ninja/Make/MSVC pipelines system-wide, **build stacks themselves are packaged as content-addressed Ghost Toolchain Packs** inside `awesome-os/upstream-mirrors` and lazily hydrated by `holo-compiler` via SHA-256 CAS:
 
-| Ghost Toolchain Pack (`v0.1.0-ghost-toolchains`) | Contents | Replaces |
+| Ghost Toolchain Pack ([`v0.1.0-ghost-toolchains`](https://github.com/awesome-os/upstream-mirrors/releases/tag/v0.1.0-ghost-toolchains) — `45277031628` GREEN) | Contents | Replaces |
 | :--- | :--- | :--- |
 | **`ghost-zig-0.14.0`** (`linux-x64`, `win64`, `macos-arm64`) | Self-contained Clang/LLVM + LLD + glibc/musl/Win32/macOS/WASI sysroots | Host GCC/Clang, MinGW, CMake, Make, `apt-get` |
-| **`ghost-llvm-23.1.6-ir`** (`linux-x64`, `win64`, tree-shaken `.tar.zst`) | Lean polyglot LLVM IR backend (`opt`, `llc`, `llvm-link`, `clang-cl`, `lld-link`, `wasm-ld`) — strips `lldb`/`flang`/`mlir`/static `.a` bloat | Monolithic LLVM installs & polyglot IR backends (Rust/Swift/Zig/Kotlin/C++) |
+| **`ghost-llvm-23.1.6-full`** (`linux-x64`, `win64`, `.tar.zst`) | Complete Clang + LLD + WASM + LLVM IR suite (`clang*`, `clang-cl`, `lld*`, `ld.lld`, `ld64.lld`, `lld-link`, `wasm-ld`, `opt`, `llc`, `lli`, `llvm-*`, `lib/clang/`, `libLLVM*`, `libclang*`, `libLTO*`) | Monolithic LLVM installs & polyglot IR backends (Rust/Swift/Zig/Kotlin/C++/Lua/PHP/Ruby/Python) |
 | **`ghost-winsdk-msvc-x64`** (`xwin 0.10.0`, `.tar.zst`) | Hermetic Windows SDK + UCRT + MSVC CRT headers & import libs | Runner-installed Windows SDK / Visual Studio drift |
 | **`ghost-ninja-1.12.1`** (`linux-x64`, `win64`, `macos`) | Minimal static legacy bridge (tree-shaken out as `holo-compiler` native recipes expand) | Ambient host Ninja / Make |
-| **`ghost-toolchains-manifest.json`** | Unified SHA-256 + CAS key index for `holo-compiler` | Ad-hoc runner setup actions |
+| **`ghost-toolchains-manifest.json`** | Unified SHA-256 + CAS key index for `holo-compiler` (`14` verified assets) | Ad-hoc runner setup actions |
 
-### Zero-CMake / Zero-Ninja 4-OS Shards (`v0.1.0-holo-4os`)
+### Zero-CMake / Zero-Ninja 4-OS Shards ([`v0.1.0-holo-4os`](https://github.com/awesome-os/upstream-mirrors/releases/tag/v0.1.0-holo-4os) — `45275672029` GREEN)
 
 Pure `holo-compiler` (`zig cc`) compiles directly from sparse `mirror/*` branches into **4 OS native shared libraries** (`Win64 .dll`, `Linux x64 .so`, `Linux ARM64 .so`, `Darwin ARM64 .dylib`) from a single `ubuntu-latest` runner with zero CMake, zero Ninja, zero Make, and zero `apt-get`:
 
-- **Live 4-OS Engines:** `libbrotli`, `libexpat`, `libsqlite3`, `libwebp` -> `16` cross-compiled shared libraries + unified `ghost-4os-manifest.json`.
+- **Live 4-OS Engines:** `libbrotli` (`1m 05s` ✓), `libexpat` (`56s` ✓), `libwebp` (`1m 12s` ✓), `libsqlite3` (`2m 25s` ✓) -> **16/16 cross-compiled shared libraries** + unified `ghost-4os-manifest.json`.
 
