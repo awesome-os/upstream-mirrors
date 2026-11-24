@@ -1,0 +1,54 @@
+# Path 2: Electron-on-Sectium Shared-V8 Component Build GN Overlay
+#
+# Overlay on top of Electron's standard GN args (`build/args/testing.gn` or
+# `build/args/all.gn`) so Electron links dynamically against the Awesome-OS
+# shared `cas-v1` V8 libraries (`v8.dll`/`libv8.so`, `v8_libbase`,
+# `v8_libplatform`) and routes display presentation through `libsectium_display`
+# instead of shipping a duplicated static Chromium/V8 monolith.
+
+# ---------------------------------------------------------------------------
+# 1. Shared Component Build (Zero Static V8 Duplication)
+# ---------------------------------------------------------------------------
+is_component_build = true
+is_official_build = false
+is_debug = false
+dcheck_always_on = false
+symbol_level = 0
+blink_symbol_level = 0
+v8_symbol_level = 0
+
+# Keep V8 startup snapshots external so they can be content-addressed and
+# shared across all Electron/Sectium processes from `cas-v1`.
+v8_use_external_startup_data = true
+v8_enable_shared_ro_heap = true
+
+# ---------------------------------------------------------------------------
+# 2. Locale & Asset Stripping (Minimal Footprint)
+# ---------------------------------------------------------------------------
+# Strip non-en-US locale .pak bundles and pseudolocales to avoid ~30 MB of
+# redundant ICU/Chromium locale bloat per Electron shell.
+enable_pseudolocales = false
+include_transport_security_state_preload_list = false
+enable_nacl = false
+enable_pdf = false
+enable_printing = false
+enable_basic_printing = false
+enable_print_preview = false
+enable_widevine = false
+
+# Restrict repackaged Electron/Chromium locale resources to en-US only.
+# Consumed by Sectium's post-gen repack filter and `b8g-ghost` asset packer.
+sectium_strip_unused_locales = true
+sectium_keep_locales = [ "en-US" ]
+
+# ---------------------------------------------------------------------------
+# 3. Shared `cas-v1` V8 + `libsectium_display` Target Bindings
+# ---------------------------------------------------------------------------
+# Instruct the Sectium GN/holo-compiler bridge to resolve V8 shared libraries
+# and headers from the central `cas-v1` GhostModuleRegistry and bind the
+# Ozone/aura presentation surface to `libsectium_display`.
+sectium_cas_profile = "cas-v1"
+sectium_shared_v8 = true
+sectium_v8_provider = "cas-v1/v8"
+sectium_display_backend = "libsectium_display"
+sectium_host_device_ipc = true

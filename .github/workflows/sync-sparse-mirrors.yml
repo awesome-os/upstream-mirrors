@@ -26,13 +26,26 @@ jobs:
           sync_sparse() {
             NAME="$1"
             URL="$2"
+            UP_BRANCH="${3:-}"
+            shift 2
+            if [ $# -gt 0 ]; then shift; fi
             BRANCH="mirror/${NAME}"
             WORK="/tmp/mirror-${NAME}"
             rm -rf "$WORK"
             echo "=== Syncing sparse ${NAME} from ${URL} -> ${BRANCH} ==="
-            git clone --depth=1 --filter=blob:none --no-checkout "$URL" "$WORK"
+            if [ -n "$UP_BRANCH" ]; then
+              git clone --depth=1 --filter=blob:none --no-checkout --branch "$UP_BRANCH" "$URL" "$WORK"
+            else
+              git clone --depth=1 --filter=blob:none --no-checkout "$URL" "$WORK"
+            fi
             git -C "$WORK" sparse-checkout init --no-cone
-            cat << 'EOF' > "$WORK/.git/info/sparse-checkout"
+            if [ $# -gt 0 ]; then
+              : > "$WORK/.git/info/sparse-checkout"
+              for p in "$@"; do
+                echo "/${p#/}" >> "$WORK/.git/info/sparse-checkout"
+              done
+            else
+              cat << 'EOF' > "$WORK/.git/info/sparse-checkout"
           /*
           !/test/
           !/tests/
@@ -52,6 +65,7 @@ jobs:
           !/research/
           !/.github/
           EOF
+            fi
             git -C "$WORK" checkout --quiet HEAD
             UP_SHA=$(git -C "$WORK" rev-parse --short HEAD)
             rm -rf "$WORK/.git"
@@ -102,6 +116,8 @@ jobs:
           sync_sparse tcc           https://github.com/TinyCC/tinycc.git
           sync_sparse ada           https://github.com/ada-url/ada.git
           sync_sparse simdutf       https://github.com/simdutf/simdutf.git
+          # Mirror #22: Electron (Path 2 Electron-on-Sectium Shared-V8 component build)
+          sync_sparse electron      https://github.com/electron/electron.git main lib/ docs/ typings/ build/args/ shell/common/api/ package.json LICENSE DEPS
 
           node -e "
             const fs = require('fs');
@@ -109,5 +125,6 @@ jobs:
             fs.writeFileSync('mirror-index.json', JSON.stringify({ schema: 'awesome-os-sparse-mirrors-v1', updated_at: new Date().toISOString(), mirrors: rows }, null, 2) + '\n');
           "
           cat mirror-index.json
+          MIRROR_COUNT=$(wc -l < /tmp/mirror-rows.jsonl | tr -d ' ')
           git add mirror-index.json
-          git diff --cached --quiet || (git commit -m "chore: update mirror-index.json for 9 sparse upstream mirrors" && git push origin main)
+          git diff --cached --quiet || (git commit -m "chore: update mirror-index.json for ${MIRROR_COUNT} sparse upstream mirrors" && git push origin main)
