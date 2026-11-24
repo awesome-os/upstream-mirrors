@@ -120,6 +120,8 @@ jobs:
           sync_sparse electron      https://github.com/electron/electron.git main lib/ docs/ typings/ build/args/ shell/common/api/ package.json LICENSE DEPS
           # Mirror #23: VS Code (MIT Code - OSS)
           sync_sparse vscode        https://github.com/microsoft/vscode.git main product.json package.json LICENSE.txt build/lib/ src/vs/code/ src/vs/platform/telemetry/
+          # Mirror #24: Eclipse Theia
+          sync_sparse theia         https://github.com/eclipse-theia/theia.git master package.json LICENSE packages/core/package.json packages/electron/ examples/browser/ examples/electron/
 
           node -e "
             const fs = require('fs');
