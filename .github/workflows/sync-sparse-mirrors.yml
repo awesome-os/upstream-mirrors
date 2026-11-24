@@ -88,6 +88,19 @@ jobs:
           sync_sparse harfbuzz      https://github.com/harfbuzz/harfbuzz.git
           sync_sparse libjpeg-turbo https://github.com/libjpeg-turbo/libjpeg-turbo.git
           sync_sparse expat         https://github.com/libexpat/libexpat.git
+          # Adopted from awesome-os/lo (lo/lib/*) — version-tracked sparse mirrors
+          sync_sparse lz4           https://github.com/lz4/lz4.git
+          sync_sparse libdeflate    https://github.com/ebiggers/libdeflate.git
+          sync_sparse md4c          https://github.com/mity/md4c.git
+          sync_sparse picohttp      https://github.com/h2o/picohttpparser.git
+          sync_sparse libffi        https://github.com/libffi/libffi.git
+          sync_sparse mbedtls       https://github.com/Mbed-TLS/mbedtls.git
+          sync_sparse curl          https://github.com/curl/curl.git
+          sync_sparse luajit        https://github.com/LuaJIT/LuaJIT.git
+          sync_sparse raylib        https://github.com/raysan5/raylib.git
+          sync_sparse tcc           https://github.com/TinyCC/tinycc.git
+          sync_sparse ada           https://github.com/ada-url/ada.git
+          sync_sparse simdutf       https://github.com/simdutf/simdutf.git
 
           node -e "
             const fs = require('fs');

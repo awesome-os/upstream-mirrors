@@ -30,7 +30,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        engine: [brotli, expat, sqlite3, libwebp]
+        engine: [brotli, expat, sqlite3, libwebp, lz4, md4c, picohttp]
     steps:
       - uses: goto-bus-stop/setup-zig@v2
         with:
@@ -105,6 +105,12 @@ jobs:
           elif [ "$ENGINE" = "libwebp" ]; then
             SRCS=$(find src/src/dec src/src/dsp src/src/enc src/src/utils src/src/demux src/sharpyuv -name '*.c' | sort)
             compile_5os libwebp -Isrc -Isrc/src -DWEBP_DLL $SRCS -lm
+          elif [ "$ENGINE" = "lz4" ]; then
+            compile_5os liblz4 -Isrc/lib src/lib/lz4.c src/lib/lz4hc.c src/lib/lz4frame.c src/lib/xxhash.c
+          elif [ "$ENGINE" = "md4c" ]; then
+            compile_5os libmd4c -Isrc/src src/src/md4c.c src/src/md4c-html.c src/src/entity.c
+          elif [ "$ENGINE" = "picohttp" ]; then
+            compile_5os libpicohttp -Isrc src/picohttpparser.c
           fi
 
           (cd dist && sha256sum * > "SHA256SUMS-${ENGINE}-5os.txt")
