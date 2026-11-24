@@ -1,14 +1,14 @@
 {
   "schema": "awesome-os-sparse-mirrors-v1",
-  "updated_at": "2026-11-23T21:37:25.905Z",
+  "updated_at": "2026-11-24T00:00:59.665Z",
   "mirrors": [
     {
       "name": "boringssl",
       "branch": "mirror/boringssl",
       "upstream_url": "https://boringssl.googlesource.com/boringssl",
-      "upstream_sha": "1bbdb4a",
-      "files": 4504,
-      "size": "236M"
+      "upstream_sha": "39952e3",
+      "files": 4538,
+      "size": "239M"
     },
     {
       "name": "brotli",
@@ -38,7 +38,7 @@
       "name": "libpng",
       "branch": "mirror/libpng",
       "upstream_url": "https://github.com/pnggroup/libpng.git",
-      "upstream_sha": "6d53b5e",
+      "upstream_sha": "c0bb005",
       "files": 507,
       "size": "5.9M"
     },
@@ -46,7 +46,7 @@
       "name": "freetype",
       "branch": "mirror/freetype",
       "upstream_url": "https://gitlab.freedesktop.org/freetype/freetype.git",
-      "upstream_sha": "504159f",
+      "upstream_sha": "d4d00b8",
       "files": 717,
       "size": "11M"
     },
@@ -54,7 +54,7 @@
       "name": "harfbuzz",
       "branch": "mirror/harfbuzz",
       "upstream_url": "https://github.com/harfbuzz/harfbuzz.git",
-      "upstream_sha": "2d67dc9",
+      "upstream_sha": "cad7de9",
       "files": 760,
       "size": "17M"
     },
