@@ -122,6 +122,8 @@ jobs:
           sync_sparse vscode        https://github.com/microsoft/vscode.git main product.json package.json LICENSE.txt build/lib/ src/vs/code/ src/vs/platform/telemetry/
           # Mirror #24: Eclipse Theia
           sync_sparse theia         https://github.com/eclipse-theia/theia.git master package.json LICENSE packages/core/package.json packages/electron/ examples/browser/ examples/electron/
+          # Mirror #25: Brave adblock-rust (MPL-2.0 Shields ad-blocker engine)
+          sync_sparse adblock-rust  https://github.com/brave/adblock-rust.git master Cargo.toml LICENSE src/
 
           node -e "
             const fs = require('fs');
