@@ -58,13 +58,22 @@ jobs:
             FILES=$(find "$WORK" -type f | wc -l)
             SIZE=$(du -sh "$WORK" | awk '{print $1}')
 
-            git checkout --orphan "$BRANCH"
+            if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+              git fetch --depth=1 origin "$BRANCH"
+              git checkout -B "$BRANCH" FETCH_HEAD
+            else
+              git checkout --orphan "$BRANCH"
+            fi
             git rm -rf . >/dev/null 2>&1 || true
             cp -a "$WORK"/. .
             git add -A
-            git commit -q -m "mirror(${NAME}): sparse stripped snapshot @ ${UP_SHA} (${FILES} files, ${SIZE})"
-            git push --force origin "$BRANCH"
-            echo "  -> Pushed ${BRANCH} @ ${UP_SHA} (${FILES} files, ${SIZE})"
+            if git diff --cached --quiet; then
+              echo "  -> ${BRANCH} @ ${UP_SHA} unchanged (0 new commits)"
+            else
+              git commit -q -m "mirror(${NAME}): sparse stripped snapshot @ ${UP_SHA} (${FILES} files, ${SIZE})"
+              git push origin "$BRANCH"
+              echo "  -> Appended commit on ${BRANCH} @ ${UP_SHA} (${FILES} files, ${SIZE})"
+            fi
             echo "{\"name\":\"${NAME}\",\"branch\":\"${BRANCH}\",\"upstream_url\":\"${URL}\",\"upstream_sha\":\"${UP_SHA}\",\"files\":${FILES},\"size\":\"${SIZE}\"}" >> /tmp/mirror-rows.jsonl
             git checkout main
           }
