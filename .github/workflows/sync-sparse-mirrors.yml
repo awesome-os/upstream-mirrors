@@ -118,6 +118,8 @@ jobs:
           sync_sparse simdutf       https://github.com/simdutf/simdutf.git
           # Mirror #22: Electron (Path 2 Electron-on-Sectium Shared-V8 component build)
           sync_sparse electron      https://github.com/electron/electron.git main lib/ docs/ typings/ build/args/ shell/common/api/ package.json LICENSE DEPS
+          # Mirror #23: VS Code (MIT Code - OSS)
+          sync_sparse vscode        https://github.com/microsoft/vscode.git main product.json package.json LICENSE.txt build/lib/ src/vs/code/ src/vs/platform/telemetry/
 
           node -e "
             const fs = require('fs');
