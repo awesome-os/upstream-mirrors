@@ -124,6 +124,8 @@ jobs:
           sync_sparse theia         https://github.com/eclipse-theia/theia.git master package.json LICENSE packages/core/package.json packages/electron/ examples/browser/ examples/electron/
           # Mirror #25: Brave adblock-rust (MPL-2.0 Shields ad-blocker engine)
           sync_sparse adblock-rust  https://github.com/brave/adblock-rust.git master Cargo.toml LICENSE src/
+          # Mirror #26: AFK-surf/xnulinux (XNU as a loadable kernel module for ARM64 Linux 7.0+ / t2xnu)
+          sync_sparse xnulinux      https://github.com/AFK-surf/xnulinux.git main README.md Makefile fki/ scripts/
 
           node -e "
             const fs = require('fs');
