@@ -1,6 +1,6 @@
 {
   "schema": "awesome-os-sparse-mirrors-v1",
-  "updated_at": "2026-11-24T05:20:19.178Z",
+  "updated_at": "2026-11-24T06:15:28.549Z",
   "mirrors": [
     {
       "name": "boringssl",
@@ -182,7 +182,7 @@
       "name": "vscode",
       "branch": "mirror/vscode",
       "upstream_url": "https://github.com/microsoft/vscode.git",
-      "upstream_sha": "b57d5c9",
+      "upstream_sha": "95ea6d4",
       "files": 251,
       "size": "2.9M"
     },
@@ -201,6 +201,14 @@
       "upstream_sha": "3f2f1d1",
       "files": 46,
       "size": "708K"
+    },
+    {
+      "name": "xnulinux",
+      "branch": "mirror/xnulinux",
+      "upstream_url": "https://github.com/AFK-surf/xnulinux.git",
+      "upstream_sha": "5b9600a",
+      "files": 19,
+      "size": "116K"
     }
   ]
 }
