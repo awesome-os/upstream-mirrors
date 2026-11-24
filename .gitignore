@@ -1,0 +1,39 @@
+# common build directory
+build
+build-*/
+*-build-*
+_fuzz_check/
+
+# CPM package cache (used by tools/run-clangcldocker.sh docker fallback)
+.cpm-cache/
+
+# Python cache
+__pycache__
+venv
+
+cmake-build-debug
+
+.cache
+docs/html
+docs/theme
+
+# Generated using only the Github workflow
+benchmark_result.json
+
+singleheader/ada.h
+singleheader/ada_c.h
+singleheader/ada.cpp
+singleheader/singleheader.zip
+
+benchmarks/competitors/servo-url/debug
+benchmarks/competitors/servo-url/target
+
+#ignore VScode
+.vscode/
+.idea
+
+# bazel output
+bazel-*
+
+# gcov coverage data files
+*.gcov

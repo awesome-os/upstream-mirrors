@@ -1,0 +1,41 @@
+# Suppress changes to standard library symbols that may be incidentally
+# emitted as weak symbols by different compiler inlining decisions.
+# These are not part of ada's public ABI.
+[suppress_function]
+  name_regexp = ^std::
+
+[suppress_type]
+  name_regexp = ^std::
+
+# Private helpers defined ada_really_inline in src/unicode.cpp. Taking their
+# address (ranges algorithms) emits an out-of-line copy whose DWARF "inline"
+# flag flips when the single ada.cpp TU grows. Signatures are unchanged.
+[suppress_function]
+  name = ada::unicode::is_forbidden_domain_code_point
+
+[suppress_function]
+  name = ada::unicode::is_lowercase_hex
+
+# Private IDNA deflate helper; in-class inline copy may be omitted or kept
+# depending on TU size. Not part of the public URL API.
+[suppress_function]
+  name = ada::idna::deflate::BitReader::get
+
+# Private inline url::set_scheme(std::string&&). The out-of-line copy is
+# emitted or omitted when the ada.cpp TU changes size. Not a public setter.
+[suppress_function]
+  name = ada::url::set_scheme
+
+# Private variadic concat helper. New instantiations show up as "changed"
+# parameter lists when call sites shift; the template itself is unchanged.
+[suppress_function]
+  name_regexp = ^ada::helpers::concat
+
+# Header-inline url_search_params destructor and the iterator EMPTY template
+# statics (with their guard variables). Every caller instantiates them from
+# the headers; libada only exports a copy while ada_c.cpp happens to use them.
+[suppress_function]
+  symbol_name_regexp = ^_ZN3ada17url_search_paramsD[012]Ev$
+
+[suppress_variable]
+  symbol_name_regexp = ^_Z(GV)?N3ada22url_search_params_iter.*5EMPTYE$
