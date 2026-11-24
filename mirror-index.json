@@ -1,6 +1,6 @@
 {
   "schema": "awesome-os-sparse-mirrors-v1",
-  "updated_at": "2026-11-24T01:39:43.378Z",
+  "updated_at": "2026-11-24T03:05:59.591Z",
   "mirrors": [
     {
       "name": "boringssl",
@@ -169,6 +169,14 @@
       "upstream_sha": "9064366",
       "files": 412,
       "size": "5.9M"
+    },
+    {
+      "name": "electron",
+      "branch": "mirror/electron",
+      "upstream_url": "https://github.com/electron/electron.git",
+      "upstream_sha": "26919e5",
+      "files": 633,
+      "size": "14M"
     }
   ]
 }
