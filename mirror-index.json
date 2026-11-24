@@ -1,6 +1,6 @@
 {
   "schema": "awesome-os-sparse-mirrors-v1",
-  "updated_at": "2026-11-24T03:12:04.813Z",
+  "updated_at": "2026-11-24T03:15:12.955Z",
   "mirrors": [
     {
       "name": "boringssl",
@@ -185,6 +185,14 @@
       "upstream_sha": "51ec2db",
       "files": 251,
       "size": "2.9M"
+    },
+    {
+      "name": "theia",
+      "branch": "mirror/theia",
+      "upstream_url": "https://github.com/eclipse-theia/theia.git",
+      "upstream_sha": "26ad67c",
+      "files": 28,
+      "size": "204K"
     }
   ]
 }
