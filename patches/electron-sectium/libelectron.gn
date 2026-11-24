@@ -1,0 +1,29 @@
+# Electron-on-Sectium `shared_library("libelectron")` GN Target Overlay
+# Drop into `src/electron/BUILD.gn` alongside `sectium_shared_v8.gn` to build
+# `libelectron.dll` / `libelectron.so` / `libelectron.dylib` instead of a monolithic
+# `electron.exe` that forces every app to show "Electron" in Task Manager.
+
+shared_library("libelectron") {
+  output_name = "libelectron"
+  defines = [ "LIBELECTRON_BUILD_DLL=1" ]
+
+  sources = [
+    "shell/app/libelectron_entry.cc",
+  ]
+
+  public = [
+    "shell/app/libelectron.h",
+  ]
+
+  deps = [
+    ":electron_lib",
+    "//content/public/app",
+    "//v8:v8",
+  ]
+
+  if (is_win) {
+    # Export libelectron_main & libelectron_abi_version directly from libelectron.dll
+    configs -= [ "//build/config/win:console" ]
+    configs += [ "//build/config/win:windowed" ]
+  }
+}
