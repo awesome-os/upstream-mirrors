@@ -1,6 +1,6 @@
 {
   "schema": "awesome-os-sparse-mirrors-v1",
-  "updated_at": "2026-11-24T00:00:59.665Z",
+  "updated_at": "2026-11-24T01:39:43.378Z",
   "mirrors": [
     {
       "name": "boringssl",
@@ -73,6 +73,102 @@
       "upstream_sha": "bbdb35e",
       "files": 204,
       "size": "131M"
+    },
+    {
+      "name": "lz4",
+      "branch": "mirror/lz4",
+      "upstream_url": "https://github.com/lz4/lz4.git",
+      "upstream_sha": "707de20",
+      "files": 129,
+      "size": "1.8M"
+    },
+    {
+      "name": "libdeflate",
+      "branch": "mirror/libdeflate",
+      "upstream_url": "https://github.com/ebiggers/libdeflate.git",
+      "upstream_sha": "424e6a8",
+      "files": 100,
+      "size": "1.3M"
+    },
+    {
+      "name": "md4c",
+      "branch": "mirror/md4c",
+      "upstream_url": "https://github.com/mity/md4c.git",
+      "upstream_sha": "f9e5eb2",
+      "files": 34,
+      "size": "956K"
+    },
+    {
+      "name": "picohttp",
+      "branch": "mirror/picohttp",
+      "upstream_url": "https://github.com/h2o/picohttpparser.git",
+      "upstream_sha": "dd573d8",
+      "files": 15,
+      "size": "152K"
+    },
+    {
+      "name": "libffi",
+      "branch": "mirror/libffi",
+      "upstream_url": "https://github.com/libffi/libffi.git",
+      "upstream_sha": "de7afe7",
+      "files": 504,
+      "size": "4.4M"
+    },
+    {
+      "name": "mbedtls",
+      "branch": "mirror/mbedtls",
+      "upstream_url": "https://github.com/Mbed-TLS/mbedtls.git",
+      "upstream_sha": "0e2cc5f",
+      "files": 227,
+      "size": "4.3M"
+    },
+    {
+      "name": "curl",
+      "branch": "mirror/curl",
+      "upstream_url": "https://github.com/curl/curl.git",
+      "upstream_sha": "63de78b",
+      "files": 695,
+      "size": "9.9M"
+    },
+    {
+      "name": "luajit",
+      "branch": "mirror/luajit",
+      "upstream_url": "https://github.com/LuaJIT/LuaJIT.git",
+      "upstream_sha": "96f7b29",
+      "files": 216,
+      "size": "4.6M"
+    },
+    {
+      "name": "raylib",
+      "branch": "mirror/raylib",
+      "upstream_url": "https://github.com/raysan5/raylib.git",
+      "upstream_sha": "4880766",
+      "files": 518,
+      "size": "27M"
+    },
+    {
+      "name": "tcc",
+      "branch": "mirror/tcc",
+      "upstream_url": "https://github.com/TinyCC/tinycc.git",
+      "upstream_sha": "e9e9e7f",
+      "files": 192,
+      "size": "4.4M"
+    },
+    {
+      "name": "ada",
+      "branch": "mirror/ada",
+      "upstream_url": "https://github.com/ada-url/ada.git",
+      "upstream_sha": "8a4bf2e",
+      "files": 118,
+      "size": "2.0M"
+    },
+    {
+      "name": "simdutf",
+      "branch": "mirror/simdutf",
+      "upstream_url": "https://github.com/simdutf/simdutf.git",
+      "upstream_sha": "9064366",
+      "files": 412,
+      "size": "5.9M"
     }
   ]
 }
