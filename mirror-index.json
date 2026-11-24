@@ -1,6 +1,6 @@
 {
   "schema": "awesome-os-sparse-mirrors-v1",
-  "updated_at": "2026-11-24T03:05:59.591Z",
+  "updated_at": "2026-11-24T03:12:04.813Z",
   "mirrors": [
     {
       "name": "boringssl",
@@ -177,6 +177,14 @@
       "upstream_sha": "26919e5",
       "files": 633,
       "size": "14M"
+    },
+    {
+      "name": "vscode",
+      "branch": "mirror/vscode",
+      "upstream_url": "https://github.com/microsoft/vscode.git",
+      "upstream_sha": "51ec2db",
+      "files": 251,
+      "size": "2.9M"
     }
   ]
 }
