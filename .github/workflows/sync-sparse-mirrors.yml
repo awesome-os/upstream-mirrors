@@ -75,7 +75,8 @@ jobs:
               echo "  -> Appended commit on ${BRANCH} @ ${UP_SHA} (${FILES} files, ${SIZE})"
             fi
             echo "{\"name\":\"${NAME}\",\"branch\":\"${BRANCH}\",\"upstream_url\":\"${URL}\",\"upstream_sha\":\"${UP_SHA}\",\"files\":${FILES},\"size\":\"${SIZE}\"}" >> /tmp/mirror-rows.jsonl
-            git checkout main
+            git checkout -f main
+            git clean -fdx
           }
 
           rm -f /tmp/mirror-rows.jsonl
