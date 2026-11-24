@@ -15,3 +15,13 @@ Each upstream lives on its own dedicated orphan branch (`mirror/<name>`) so `mai
 - `mirror/expat`
 
 Updated automatically by [`.github/workflows/sync-sparse-mirrors.yml`](.github/workflows/sync-sparse-mirrors.yml).
+
+## Quick Install & Run (Windows / Linux / macOS)
+
+```sh
+# Download latest release assets (all platforms)
+gh release download -R awesome-os/upstream-mirrors --dir ./upstream-mirrors-release
+
+# Or clone source directly (all platforms)
+git clone https://github.com/awesome-os/upstream-mirrors.git && cd upstream-mirrors
+```
