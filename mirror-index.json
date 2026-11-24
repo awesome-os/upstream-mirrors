@@ -1,6 +1,6 @@
 {
   "schema": "awesome-os-sparse-mirrors-v1",
-  "updated_at": "2026-11-24T03:15:12.955Z",
+  "updated_at": "2026-11-24T05:20:19.178Z",
   "mirrors": [
     {
       "name": "boringssl",
@@ -86,7 +86,7 @@
       "name": "libdeflate",
       "branch": "mirror/libdeflate",
       "upstream_url": "https://github.com/ebiggers/libdeflate.git",
-      "upstream_sha": "424e6a8",
+      "upstream_sha": "0079686",
       "files": 100,
       "size": "1.3M"
     },
@@ -174,7 +174,7 @@
       "name": "electron",
       "branch": "mirror/electron",
       "upstream_url": "https://github.com/electron/electron.git",
-      "upstream_sha": "26919e5",
+      "upstream_sha": "48fe6dc",
       "files": 633,
       "size": "14M"
     },
@@ -182,7 +182,7 @@
       "name": "vscode",
       "branch": "mirror/vscode",
       "upstream_url": "https://github.com/microsoft/vscode.git",
-      "upstream_sha": "51ec2db",
+      "upstream_sha": "b57d5c9",
       "files": 251,
       "size": "2.9M"
     },
@@ -193,6 +193,14 @@
       "upstream_sha": "26ad67c",
       "files": 28,
       "size": "204K"
+    },
+    {
+      "name": "adblock-rust",
+      "branch": "mirror/adblock-rust",
+      "upstream_url": "https://github.com/brave/adblock-rust.git",
+      "upstream_sha": "3f2f1d1",
+      "files": 46,
+      "size": "708K"
     }
   ]
 }
