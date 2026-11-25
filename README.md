@@ -19,9 +19,9 @@ Updated automatically by [`.github/workflows/sync-sparse-mirrors.yml`](.github/w
 ## Quick Install & Run (Windows / Linux / macOS)
 
 ```sh
-# Download latest release assets (all platforms)
-gh release download -R awesome-os/upstream-mirrors --dir ./upstream-mirrors-release
+# Install / hydrate from v11 CAS via holo-pm
+holo-pm install repository://github.com/awesome-os/upstream-mirrors@main
 
-# Or clone source directly (all platforms)
-git clone https://github.com/awesome-os/upstream-mirrors.git && cd upstream-mirrors
+# Or project & run directly via holo-project (0-byte hardlink)
+holo-project "project://cpp/upstream-mirrors?from=repository://github.com/awesome-os/upstream-mirrors@main"
 ```
