@@ -1,0 +1,744 @@
+name: Holo 5-OS Tier-1B & Tier-2 Shards — Pure Zig 0.14.0 Libraries
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag for 5-OS shared + WASI libraries'
+        required: true
+        default: 'v11-max-5os-latest'
+  schedule:
+    - cron: '0 7 * * 0'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/holo-5os-tier2-shards.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  ensure-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      versions_json: ${{ steps.resolve.outputs.versions_json }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Ensure GitHub Release & Resolve Tier-1B / Tier-2 Upstream Versions
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || 'v11-max-5os-latest' }}
+        run: |
+          gh release view "$TAG" --repo awesome-os/upstream-mirrors >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo awesome-os/upstream-mirrors \
+              --title "Holo v11 Max 5-OS Shared + WASI Libraries (${TAG})" \
+              --notes "Production max-version 5-OS shared libraries (Win64 .dll, Linux x64/ARM64 .so, macOS ARM64 .dylib, wasm32-wasi .wasm) compiled directly from upstream sources via pure holo-compiler (zig 0.14.0) — zero CMake, zero Ninja, zero Make."
+
+          node -e '
+            const fs = require("node:fs");
+            const defaults = {
+              mbedtls:    { pkg: "mbedtls",    libOut: "libmbedtls",    repo: "Mbed-TLS/mbedtls",               tag: "mbedtls-4.3.0", version: "4.3.0" },
+              llhttp:     { pkg: "llhttp",     libOut: "libllhttp",     repo: "nodejs/llhttp",                  tag: "release/v9.4.4", version: "9.4.4" },
+              nghttp2:    { pkg: "nghttp2",    libOut: "libnghttp2",    repo: "nghttp2/nghttp2",                tag: "v1.71.0",       version: "1.71.0" },
+              nghttp3:    { pkg: "nghttp3",    libOut: "libnghttp3",    repo: "ngtcp2/nghttp3",                 tag: "v1.19.0",       version: "1.19.0" },
+              "c-ares":   { pkg: "c-ares",     libOut: "libcares",      repo: "c-ares/c-ares",                  tag: "v1.34.9",       version: "1.34.9" },
+              fast_float: { pkg: "fast_float", libOut: "libfast_float", repo: "fastfloat/fast_float",           tag: "v8.4.0",        version: "8.4.0" },
+              libpng:     { pkg: "libpng",     libOut: "libpng",        repo: "pnggroup/libpng",                tag: "v1.6.59",       version: "1.6.59" },
+              giflib:     { pkg: "giflib",     libOut: "libgiflib",     repo: "sourceforge.net/projects/giflib", tag: "giflib-6.1.3", version: "6.1.3" },
+              freetype:   { pkg: "freetype",   libOut: "libfreetype",   repo: "freetype/freetype",              tag: "VER-2-15-0",    version: "2.15.0" },
+              harfbuzz:   { pkg: "harfbuzz",   libOut: "libharfbuzz",   repo: "harfbuzz/harfbuzz",              tag: "15.2.0",        version: "15.2.0" },
+              onig:       { pkg: "onig",       libOut: "libonig",       repo: "kkos/oniguruma",                 tag: "v6.9.10",       version: "6.9.10" },
+              "zlib-ng":  { pkg: "zlib-ng",    libOut: "libzlib-ng",    repo: "zlib-ng/zlib-ng",                tag: "2.3.3",         version: "2.3.3" }
+            };
+
+            (async () => {
+              const resolved = structuredClone(defaults);
+              try {
+                const res = await fetch("https://raw.githubusercontent.com/awesome-os/t2linux-baseline/main/catalog/live-upstream-tracker.json");
+                if (res.ok) {
+                  const tracker = await res.json();
+                  const byPkg = new Map((tracker.libraries || []).map(x => [x.pkg, x]));
+                  for (const [key, cfg] of Object.entries(resolved)) {
+                    const hit = byPkg.get(cfg.pkg);
+                    if (hit && hit.upstreamTag) {
+                      cfg.tag = hit.upstreamTag;
+                      cfg.version = hit.upstreamVersion || hit.upstreamTag.replace(/^v/, "");
+                      if (hit.repo && hit.repo.includes("/") && !hit.repo.includes("sourceforge.net")) {
+                        cfg.repo = hit.repo;
+                      }
+                    }
+                  }
+                }
+              } catch (err) {
+                console.warn("[warn] tracker fetch failed, using safe defaults:", err.message);
+              }
+
+              const payload = {
+                schema: "holo-v11.resolved-versions.v1",
+                tier: "tier1b-tier2",
+                resolvedAt: new Date().toISOString(),
+                releaseTag: process.env.TAG,
+                libraries: resolved
+              };
+              fs.writeFileSync("resolved-tier2-versions.json", JSON.stringify(payload, null, 2) + "\n");
+              const compact = JSON.stringify(resolved);
+              const outFile = process.env.GITHUB_OUTPUT;
+              fs.appendFileSync(outFile, `release_tag=${process.env.TAG}\n`);
+              fs.appendFileSync(outFile, `versions_json=${compact}\n`);
+              console.log("Resolved 12 Tier-1B/Tier-2 libraries:", JSON.stringify(resolved, null, 2));
+            })().catch(e => { console.error(e); process.exit(1); });
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: resolved-tier2-versions
+          path: resolved-tier2-versions.json
+
+  build-tier2-5os-shard:
+    needs: ensure-release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        lib:
+          - mbedtls
+          - llhttp
+          - nghttp2
+          - nghttp3
+          - c-ares
+          - fast_float
+          - libpng
+          - giflib
+          - freetype
+          - harfbuzz
+          - onig
+          - zlib-ng
+    steps:
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile ${{ matrix.lib }} for 5 OS Targets via Pure Zig 0.14.0 + Smoke Test
+        env:
+          LIB_KEY: ${{ matrix.lib }}
+          VERSIONS_JSON: ${{ needs.ensure-release.outputs.versions_json }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          eval "$(node -e '
+            const v = JSON.parse(process.env.VERSIONS_JSON)[process.env.LIB_KEY];
+            console.log(`UP_REPO=${JSON.stringify(v.repo)}`);
+            console.log(`UP_TAG=${JSON.stringify(v.tag)}`);
+            console.log(`UP_VER=${JSON.stringify(v.version)}`);
+            console.log(`LIB_OUT=${JSON.stringify(v.libOut)}`);
+          ')"
+          echo "=== Building ${LIB_KEY} (${LIB_OUT}) @ ${UP_REPO} ${UP_TAG} (${UP_VER}) ==="
+
+          mkdir -p src dist
+
+          compile_5os_c() {
+            local out="$1"; shift
+            zig cc -target x86_64-windows-gnu -O2 -shared -s "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
+            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
+            zig cc -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
+            zig cc -target wasm32-wasi        -O2 -mexec-model=reactor "$@" -o "dist/${out}-wasm32-wasi.wasm"
+          }
+
+          compile_4os_c() {
+            local out="$1"; shift
+            zig cc -target x86_64-windows-gnu -O2 -shared -s "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
+            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
+            zig cc -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
+          }
+
+          compile_4os_cxx() {
+            local out="$1"; shift
+            zig c++ -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig c++ -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
+            zig c++ -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
+            zig c++ -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
+          }
+
+          clone_tag() {
+            git clone --depth=1 --branch "$UP_TAG" "https://github.com/${UP_REPO}.git" src
+          }
+
+          case "$LIB_KEY" in
+            mbedtls)
+              rm -rf src && mkdir -p /tmp/mbed src
+              TAR_URL="https://github.com/${UP_REPO}/releases/download/${UP_TAG}/${UP_TAG}.tar.bz2"
+              if ! curl -fsSL "$TAR_URL" -o /tmp/mbed/mbedtls.tar.bz2; then
+                echo "[warn] ${UP_TAG} tarball failed, falling back to mbedtls-3.6.8"
+                curl -fsSL "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.8/mbedtls-3.6.8.tar.bz2" -o /tmp/mbed/mbedtls.tar.bz2
+              fi
+              tar -xjf /tmp/mbed/mbedtls.tar.bz2 -C src --strip-components=1
+
+              if [ -d src/tf-psa-crypto ]; then
+                # mbedtls v4.x split layout
+                if [ ! -f src/library/error.c ] && [ -f src/scripts/generate_errors.pl ]; then
+                  (cd src && perl scripts/generate_errors.pl tf-psa-crypto/drivers/builtin/include/mbedtls include/mbedtls scripts/data_files library/error.c || true)
+                fi
+                if [ ! -f src/library/version_features.c ] && [ -f src/scripts/generate_features.pl ]; then
+                  (cd src && perl scripts/generate_features.pl include/mbedtls scripts/data_files library/version_features.c || true)
+                fi
+                if [ ! -f src/library/ssl_debug_helpers_generated.c ] && [ -f src/framework/scripts/generate_ssl_debug_helpers.py ]; then
+                  (cd src && python3 framework/scripts/generate_ssl_debug_helpers.py --mbedtls-root . library || true)
+                fi
+                if [ -f src/scripts/generate_config_checks.py ]; then
+                  (cd src && python3 scripts/generate_config_checks.py library || true)
+                fi
+                if [ -f src/tf-psa-crypto/scripts/generate_driver_wrappers.py ]; then
+                  (cd src/tf-psa-crypto && python3 scripts/generate_driver_wrappers.py core || true)
+                fi
+                MBED_INCS="-Isrc/include -Isrc/library -Isrc/tf-psa-crypto/include -Isrc/tf-psa-crypto/core -Isrc/tf-psa-crypto/drivers/builtin/include -Isrc/tf-psa-crypto/drivers/builtin/src -Isrc/tf-psa-crypto/drivers/everest/include"
+                SRCS_ALL=$(find src/library src/tf-psa-crypto/core src/tf-psa-crypto/drivers/builtin/src -maxdepth 1 -name '*.c' | sort)
+                SRCS_NOWASI=$(echo "$SRCS_ALL" | grep -vE '/(net_sockets|timing)\.c$')
+                zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $MBED_INCS $SRCS_ALL -lws2_32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+                zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-x64.so"
+                zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-arm64.so"
+                zig cc -target aarch64-macos      -O2 -shared -fPIC $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-macos-arm64.dylib"
+                zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $MBED_INCS -DMBEDTLS_NO_PLATFORM_ENTROPY $SRCS_NOWASI -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              else
+                # mbedtls v3.6.x layout
+                MBED_INCS="-Isrc/include -Isrc/library"
+                SRCS_ALL=$(find src/library -maxdepth 1 -name '*.c' | sort)
+                SRCS_NOWASI=$(echo "$SRCS_ALL" | grep -vE '/(net_sockets|timing)\.c$')
+                zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $MBED_INCS $SRCS_ALL -lws2_32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+                zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-x64.so"
+                zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-arm64.so"
+                zig cc -target aarch64-macos      -O2 -shared -fPIC $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-macos-arm64.dylib"
+                zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $MBED_INCS -DMBEDTLS_NO_PLATFORM_ENTROPY $SRCS_NOWASI -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              fi
+              ;;
+
+            llhttp)
+              clone_tag
+              SRCS=$(find src/src -maxdepth 1 -name '*.c' | sort)
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols -Isrc/include $SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s -Isrc/include $SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s -Isrc/include $SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC -Isrc/include $SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor -Isrc/include $SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            nghttp2)
+              clone_tag
+              mkdir -p /tmp/ng2_inc/nghttp2
+              node -e '
+                const fs = require("node:fs");
+                const ver = process.env.UP_VER.replace(/^v/, "").split("-")[0];
+                const [maj = "1", min = "0", pat = "0"] = ver.split(".");
+                const hex = "0x" + [maj, min, pat].map(x => Number(x).toString(16).padStart(2, "0")).join("");
+                let tpl = fs.readFileSync("src/lib/includes/nghttp2/nghttp2ver.h.in", "utf8");
+                tpl = tpl.replaceAll("@PACKAGE_VERSION@", ver).replaceAll("@PACKAGE_VERSION_NUM@", hex);
+                fs.writeFileSync("/tmp/ng2_inc/nghttp2/nghttp2ver.h", tpl);
+              '
+              cat > /tmp/ng2_inc/config.h <<'EOF'
+          #ifndef NGHTTP2_CONFIG_H
+          #define NGHTTP2_CONFIG_H
+          #if defined(_WIN32)
+          #define HAVE_WINSOCK2_H 1
+          #else
+          #define HAVE_ARPA_INET_H 1
+          #define HAVE_NETINET_IN_H 1
+          #define HAVE_UNISTD_H 1
+          #endif
+          #define HAVE_TIME_H 1
+          #define HAVE_STDINT_H 1
+          #define HAVE_INTTYPES_H 1
+          #endif
+          EOF
+              NG2_SRCS="src/lib/nghttp2_pq.c src/lib/nghttp2_map.c src/lib/nghttp2_queue.c src/lib/nghttp2_frame.c src/lib/nghttp2_buf.c src/lib/nghttp2_stream.c src/lib/nghttp2_outbound_item.c src/lib/nghttp2_session.c src/lib/nghttp2_submit.c src/lib/nghttp2_helper.c src/lib/nghttp2_alpn.c src/lib/nghttp2_hd.c src/lib/nghttp2_hd_huffman.c src/lib/nghttp2_hd_huffman_data.c src/lib/nghttp2_version.c src/lib/nghttp2_priority_spec.c src/lib/nghttp2_option.c src/lib/nghttp2_callbacks.c src/lib/nghttp2_mem.c src/lib/nghttp2_http.c src/lib/nghttp2_rcbuf.c src/lib/nghttp2_extpri.c src/lib/nghttp2_ratelim.c src/lib/nghttp2_time.c src/lib/nghttp2_debug.c src/lib/sfparse.c"
+              NG2_FLAGS="-I/tmp/ng2_inc -Isrc/lib/includes -Isrc/lib -DHAVE_CONFIG_H -DBUILDING_NGHTTP2"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $NG2_FLAGS $NG2_SRCS -lws2_32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            nghttp3)
+              clone_tag
+              mkdir -p /tmp/ng3_inc/nghttp3
+              node -e '
+                const fs = require("node:fs");
+                const ver = process.env.UP_VER.replace(/^v/, "").split("-")[0];
+                const [maj = "1", min = "0", pat = "0"] = ver.split(".");
+                const hex = "0x" + [maj, min, pat].map(x => Number(x).toString(16).padStart(2, "0")).join("");
+                let tpl = fs.readFileSync("src/lib/includes/nghttp3/version.h.in", "utf8");
+                tpl = tpl.replaceAll("@PACKAGE_VERSION@", ver).replaceAll("@PACKAGE_VERSION_NUM@", hex);
+                fs.writeFileSync("/tmp/ng3_inc/nghttp3/version.h", tpl);
+              '
+              NG3_SRCS="$(find src/lib -maxdepth 1 -name 'nghttp3_*.c' | sort) src/lib/sfparse/sfparse.c"
+              NG3_FLAGS="-I/tmp/ng3_inc -Isrc/lib/includes -Isrc/lib -Isrc/lib/sfparse -DBUILDING_NGHTTP3"
+              compile_5os_c "$LIB_OUT" $NG3_FLAGS $NG3_SRCS
+              ;;
+
+            c-ares)
+              clone_tag
+              mkdir -p /tmp/cares_inc
+              cat > /tmp/cares_inc/ares_build.h <<'EOF'
+          #ifndef __CARES_BUILD_H
+          #define __CARES_BUILD_H
+          #if defined(_WIN32)
+          #  define CARES_TYPEOF_ARES_SOCKLEN_T int
+          #  define CARES_TYPEOF_ARES_SSIZE_T ptrdiff_t
+          #  define CARES_HAVE_WINDOWS_H 1
+          #  define CARES_HAVE_WS2TCPIP_H 1
+          #  define CARES_HAVE_WINSOCK2_H 1
+          #  include <stddef.h>
+          #  include <winsock2.h>
+          #  include <ws2tcpip.h>
+          #  include <windows.h>
+          #else
+          #  include <sys/types.h>
+          #  include <sys/socket.h>
+          #  include <sys/select.h>
+          #  define CARES_TYPEOF_ARES_SOCKLEN_T socklen_t
+          #  define CARES_TYPEOF_ARES_SSIZE_T ssize_t
+          #  define CARES_HAVE_SYS_TYPES_H 1
+          #  define CARES_HAVE_SYS_SOCKET_H 1
+          #  define CARES_HAVE_SYS_SELECT_H 1
+          #endif
+          #endif
+          EOF
+              cat > /tmp/cares_inc/ares_config.h <<'EOF'
+          #ifndef ARES_CONFIG_H
+          #define ARES_CONFIG_H
+          #define HAVE_AF_INET6 1
+          #define HAVE_ASSERT_H 1
+          #define HAVE_ERRNO_H 1
+          #define HAVE_INTTYPES_H 1
+          #define HAVE_LIMITS_H 1
+          #define HAVE_LONGLONG 1
+          #define HAVE_PF_INET6 1
+          #define HAVE_RECV 1
+          #define HAVE_RECVFROM 1
+          #define HAVE_SEND 1
+          #define HAVE_SENDTO 1
+          #define HAVE_SETSOCKOPT 1
+          #define HAVE_SIGNAL_H 1
+          #define HAVE_SOCKET 1
+          #define HAVE_STAT 1
+          #define HAVE_STDBOOL_H 1
+          #define HAVE_STDINT_H 1
+          #define HAVE_STDLIB_H 1
+          #define HAVE_STRING_H 1
+          #define HAVE_STRDUP 1
+          #define HAVE_STRNLEN 1
+          #define HAVE_STRUCT_ADDRINFO 1
+          #define HAVE_STRUCT_IN6_ADDR 1
+          #define HAVE_STRUCT_SOCKADDR_IN6 1
+          #define HAVE_STRUCT_SOCKADDR_STORAGE 1
+          #define HAVE_STRUCT_TIMEVAL 1
+          #define HAVE_SYS_STAT_H 1
+          #define HAVE_SYS_TYPES_H 1
+          #define HAVE_TIME_H 1
+          #define HAVE_FREEADDRINFO 1
+          #define HAVE_GETADDRINFO 1
+          #define HAVE_GETADDRINFO_THREADSAFE 1
+          #define HAVE_GETENV 1
+          #define HAVE_GETHOSTNAME 1
+          #define HAVE_GETNAMEINFO 1
+          #define HAVE_INET_NTOP 1
+          #define HAVE_INET_PTON 1
+          #define HAVE_CONNECT 1
+
+          #if defined(_WIN32)
+          #  define HAVE_CLOSESOCKET 1
+          #  define HAVE_GETBESTROUTE2 1
+          #  define HAVE_CONVERTINTERFACEINDEXTOLUID 1
+          #  define HAVE_CONVERTINTERFACELUIDTONAMEA 1
+          #  define HAVE_NOTIFYIPINTERFACECHANGE 1
+          #  define HAVE_IOCTLSOCKET 1
+          #  define HAVE_IOCTLSOCKET_FIONBIO 1
+          #  define HAVE_IPHLPAPI_H 1
+          #  define HAVE_NETIOAPI_H 1
+          #  define HAVE_MALLOC_H 1
+          #  define HAVE_STRCMPI 1
+          #  define HAVE_STRICMP 1
+          #  define HAVE_STRNCMPI 1
+          #  define HAVE_STRNICMP 1
+          #  define HAVE_WINDOWS_H 1
+          #  define HAVE_WINSOCK2_H 1
+          #  define HAVE_WS2TCPIP_H 1
+          #  define HAVE_MSWSOCK_H 1
+          #  define GETHOSTNAME_TYPE_ARG2 int
+          #  define GETNAMEINFO_QUAL_ARG1 const
+          #  define GETNAMEINFO_TYPE_ARG1 struct sockaddr *
+          #  define GETNAMEINFO_TYPE_ARG2 socklen_t
+          #  define GETNAMEINFO_TYPE_ARG46 DWORD
+          #  define GETNAMEINFO_TYPE_ARG7 int
+          #  define RECVFROM_QUAL_ARG5
+          #  define RECVFROM_TYPE_ARG1 SOCKET
+          #  define RECVFROM_TYPE_ARG2 char *
+          #  define RECVFROM_TYPE_ARG3 int
+          #  define RECVFROM_TYPE_ARG4 int
+          #  define RECVFROM_TYPE_ARG5 struct sockaddr *
+          #  define RECVFROM_TYPE_ARG6 int *
+          #  define RECVFROM_TYPE_RETV int
+          #  define RECV_TYPE_ARG1 SOCKET
+          #  define RECV_TYPE_ARG2 char *
+          #  define RECV_TYPE_ARG3 int
+          #  define RECV_TYPE_ARG4 int
+          #  define RECV_TYPE_RETV int
+          #  define SEND_TYPE_ARG1 SOCKET
+          #  define SEND_TYPE_ARG2 const char *
+          #  define SEND_TYPE_ARG3 int
+          #  define SEND_TYPE_ARG4 int
+          #  define SEND_TYPE_RETV int
+          #else
+          #  define HAVE_ARPA_INET_H 1
+          #  define HAVE_CLOCK_GETTIME_MONOTONIC 1
+          #  define HAVE_FCNTL 1
+          #  define HAVE_FCNTL_H 1
+          #  define HAVE_FCNTL_O_NONBLOCK 1
+          #  define HAVE_GETTIMEOFDAY 1
+          #  define HAVE_IF_INDEXTONAME 1
+          #  define HAVE_IF_NAMETOINDEX 1
+          #  define HAVE_IOCTL 1
+          #  define HAVE_IOCTL_FIONBIO 1
+          #  define HAVE_NETDB_H 1
+          #  define HAVE_NETINET_IN_H 1
+          #  define HAVE_NETINET_TCP_H 1
+          #  define HAVE_NET_IF_H 1
+          #  define HAVE_PIPE 1
+          #  define HAVE_POLL 1
+          #  define HAVE_POLL_H 1
+          #  define HAVE_STRCASECMP 1
+          #  define HAVE_STRINGS_H 1
+          #  define HAVE_STRNCASECMP 1
+          #  define HAVE_SYS_IOCTL_H 1
+          #  define HAVE_SYS_PARAM_H 1
+          #  define HAVE_SYS_SELECT_H 1
+          #  define HAVE_SYS_SOCKET_H 1
+          #  define HAVE_SYS_TIME_H 1
+          #  define HAVE_SYS_UIO_H 1
+          #  define HAVE_UNISTD_H 1
+          #  define HAVE_WRITEV 1
+          #  define HAVE_IFADDRS_H 1
+          #  define HAVE_GETIFADDRS 1
+          #  define GETHOSTNAME_TYPE_ARG2 size_t
+          #  define GETNAMEINFO_QUAL_ARG1 const
+          #  define GETNAMEINFO_TYPE_ARG1 struct sockaddr *
+          #  define GETNAMEINFO_TYPE_ARG2 socklen_t
+          #  define GETNAMEINFO_TYPE_ARG46 socklen_t
+          #  define GETNAMEINFO_TYPE_ARG7 int
+          #  define RECVFROM_QUAL_ARG5
+          #  define RECVFROM_TYPE_ARG1 int
+          #  define RECVFROM_TYPE_ARG2 void *
+          #  define RECVFROM_TYPE_ARG3 size_t
+          #  define RECVFROM_TYPE_ARG4 int
+          #  define RECVFROM_TYPE_ARG5 struct sockaddr *
+          #  define RECVFROM_TYPE_ARG6 socklen_t *
+          #  define RECVFROM_TYPE_RETV ssize_t
+          #  define RECV_TYPE_ARG1 int
+          #  define RECV_TYPE_ARG2 void *
+          #  define RECV_TYPE_ARG3 size_t
+          #  define RECV_TYPE_ARG4 int
+          #  define RECV_TYPE_RETV ssize_t
+          #  define SEND_TYPE_ARG1 int
+          #  define SEND_TYPE_ARG2 const void *
+          #  define SEND_TYPE_ARG3 size_t
+          #  define SEND_TYPE_ARG4 int
+          #  define SEND_TYPE_RETV ssize_t
+          #  if defined(__APPLE__)
+          #    define HAVE_KQUEUE 1
+          #    define HAVE_SYS_EVENT_H 1
+          #    define HAVE_ARC4RANDOM_BUF 1
+          #    define HAVE_AVAILABILITYMACROS_H 1
+          #    define CARES_RANDOM_FILE "/dev/urandom"
+          #  elif defined(__linux__)
+          #    define HAVE_EPOLL 1
+          #    define HAVE_SYS_EPOLL_H 1
+          #    define HAVE_GETRANDOM 1
+          #    define HAVE_SYS_RANDOM_H 1
+          #    define HAVE_PIPE2 1
+          #    define HAVE_MSG_NOSIGNAL 1
+          #    define CARES_RANDOM_FILE "/dev/urandom"
+          #  endif
+          #endif
+          #define RECVFROM_TYPE_ARG2_IS_VOID 1
+          #define RECVFROM_TYPE_ARG5_IS_VOID 0
+          #define RECVFROM_TYPE_ARG6_IS_VOID 0
+          #define GETSERVBYPORT_R_ARGS 6
+          #define GETSERVBYNAME_R_ARGS 6
+          #endif
+          EOF
+              CARES_SRCS=$(find src/src/lib -name '*.c' | sort)
+              CARES_FLAGS="-I/tmp/cares_inc -Isrc/include -Isrc/src/lib -DHAVE_CONFIG_H=1 -DCARES_BUILDING_LIBRARY"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $CARES_FLAGS $CARES_SRCS -lws2_32 -liphlpapi -ladvapi32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $CARES_FLAGS $CARES_SRCS -framework SystemConfiguration -framework CoreFoundation -o "dist/${LIB_OUT}-macos-arm64.dylib" || \
+                zig cc -target aarch64-macos -O2 -shared -fPIC $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              ;;
+
+            fast_float)
+              clone_tag
+              cat > /tmp/b8g_fast_float.cc <<'EOF'
+          #include <cstddef>
+          #include <system_error>
+          #include "fast_float/fast_float.h"
+
+          extern "C" double b8g_fast_float_f64(const char* s, size_t len, int* ok) {
+            double val = 0.0;
+            if (!s) {
+              if (ok) *ok = 0;
+              return val;
+            }
+            auto res = fast_float::from_chars(s, s + len, val);
+            if (ok) *ok = (res.ec == std::errc()) ? 1 : 0;
+            return val;
+          }
+          EOF
+              compile_4os_cxx "$LIB_OUT" -std=c++17 -Isrc/include /tmp/b8g_fast_float.cc
+              ;;
+
+            libpng)
+              clone_tag
+              cp src/scripts/pnglibconf.h.prebuilt src/pnglibconf.h
+              git clone --depth=1 https://github.com/madler/zlib.git /tmp/zlib_src
+              PNG_SRCS=$(find src -maxdepth 1 -name 'png*.c' ! -name 'pngtest.c' | sort)
+              ZLIB_SRCS=$(find /tmp/zlib_src -maxdepth 1 -name '*.c' | sort)
+              PNG_FLAGS="-Isrc -I/tmp/zlib_src -DPNG_ARM_NEON_OPT=0 -DPNG_INTEL_SSE_OPT=0"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $PNG_FLAGS -DPNG_BUILD_DLL $PNG_SRCS $ZLIB_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            giflib)
+              mkdir -p /tmp/gif src
+              if ! curl -fsSL "https://sourceforge.net/projects/giflib/files/giflib-${UP_VER}.tar.gz/download" -o /tmp/gif/giflib.tar.gz; then
+                curl -fsSL "https://sourceforge.net/projects/giflib/files/giflib-5.2.2.tar.gz/download" -o /tmp/gif/giflib.tar.gz
+              fi
+              tar -xzf /tmp/gif/giflib.tar.gz -C src --strip-components=1
+              GIF_SRCS="src/dgif_lib.c src/egif_lib.c src/gif_err.c src/gif_font.c src/gif_hash.c src/gifalloc.c src/openbsd-reallocarray.c src/quantize.c"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            freetype)
+              clone_tag
+              FT_SRCS="src/src/base/ftbase.c src/src/base/ftinit.c src/src/base/ftsystem.c src/src/base/ftdebug.c src/src/truetype/truetype.c src/src/sfnt/sfnt.c src/src/smooth/smooth.c src/src/autofit/autofit.c src/src/cff/cff.c src/src/psnames/psnames.c src/src/pshinter/pshinter.c src/src/raster/raster.c"
+              FT_FLAGS="-Isrc/include -DFT2_BUILD_LIBRARY"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $FT_FLAGS -DDLL_EXPORT $FT_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            harfbuzz)
+              clone_tag
+              node -e '
+                const fs = require("node:fs");
+                const ver = process.env.UP_VER.replace(/^v/, "").split("-")[0];
+                const [maj = "15", min = "0", mic = "0"] = ver.split(".");
+                let tpl = fs.readFileSync("src/src/hb-version.h.in", "utf8");
+                tpl = tpl
+                  .replaceAll("@HB_VERSION_MAJOR@", maj)
+                  .replaceAll("@HB_VERSION_MINOR@", min)
+                  .replaceAll("@HB_VERSION_MICRO@", mic)
+                  .replaceAll("@HB_VERSION@", ver);
+                fs.writeFileSync("src/src/hb-version.h", tpl);
+              '
+              compile_4os_cxx "$LIB_OUT" -std=c++11 -fno-exceptions -fno-rtti -DHB_NO_MT -Isrc/src src/src/harfbuzz.cc
+              ;;
+
+            onig)
+              clone_tag
+              mkdir -p /tmp/onig_inc
+              cat > /tmp/onig_inc/config.h <<'EOF'
+          #ifndef ONIG_CONFIG_H
+          #define ONIG_CONFIG_H
+          #define HAVE_STDINT_H 1
+          #define HAVE_INTTYPES_H 1
+          #define HAVE_SYS_TYPES_H 1
+          #define SIZEOF_INT 4
+          #define SIZEOF_LONG_LONG 8
+          #define SIZEOF_VOIDP 8
+          #if defined(_WIN32)
+          #  define SIZEOF_LONG 4
+          #  define HAVE_ALLOCA 1
+          #else
+          #  define SIZEOF_LONG 8
+          #  define HAVE_UNISTD_H 1
+          #  define HAVE_SYS_TIME_H 1
+          #  define HAVE_SYS_TIMES_H 1
+          #  define HAVE_ALLOCA 1
+          #  define HAVE_ALLOCA_H 1
+          #endif
+          #define PACKAGE "onig"
+          #define PACKAGE_VERSION "6.9.10"
+          #define VERSION "6.9.10"
+          #endif
+          EOF
+              ONIG_SRCS="src/src/regparse.c src/src/regcomp.c src/src/regexec.c src/src/regenc.c src/src/regerror.c src/src/regext.c src/src/regsyntax.c src/src/regtrav.c src/src/regversion.c src/src/st.c src/src/reggnu.c src/src/unicode.c src/src/unicode_unfold_key.c src/src/unicode_fold1_key.c src/src/unicode_fold2_key.c src/src/unicode_fold3_key.c src/src/ascii.c src/src/utf8.c src/src/utf16_be.c src/src/utf16_le.c src/src/utf32_be.c src/src/utf32_le.c src/src/euc_jp.c src/src/euc_jp_prop.c src/src/sjis.c src/src/sjis_prop.c src/src/iso8859_1.c src/src/iso8859_2.c src/src/iso8859_3.c src/src/iso8859_4.c src/src/iso8859_5.c src/src/iso8859_6.c src/src/iso8859_7.c src/src/iso8859_8.c src/src/iso8859_9.c src/src/iso8859_10.c src/src/iso8859_11.c src/src/iso8859_13.c src/src/iso8859_14.c src/src/iso8859_15.c src/src/iso8859_16.c src/src/euc_tw.c src/src/euc_kr.c src/src/big5.c src/src/gb18030.c src/src/koi8_r.c src/src/cp1251.c src/src/onig_init.c"
+              ONIG_FLAGS="-I/tmp/onig_inc -Isrc/src -DHAVE_CONFIG_H"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            zlib-ng)
+              clone_tag
+              mkdir -p /tmp/zng_inc
+              cp src/zlib_name_mangling.h.empty /tmp/zng_inc/zlib_name_mangling.h
+              cp src/zlib_name_mangling.h.empty /tmp/zng_inc/zlib_name_mangling-ng.h
+              cp src/zlib.h.in /tmp/zng_inc/zlib.h
+              cp src/zlib-ng.h.in /tmp/zng_inc/zlib-ng.h
+              sed -e 's/@ZLIB_SYMBOL_PREFIX@//g' -e 's/#cmakedefine HAVE_UNISTD_H/#ifndef _WIN32\n#define HAVE_UNISTD_H 1\n#endif/' -e 's/#cmakedefine HAVE_STDARG_H/#define HAVE_STDARG_H 1/' -e 's/#cmakedefine Z_HAVE_UNISTD_H/#ifndef _WIN32\n#define Z_HAVE_UNISTD_H 1\n#endif/' src/zconf.h.in > /tmp/zng_inc/zconf.h
+              sed -e 's/@ZLIB_SYMBOL_PREFIX@//g' -e 's/#cmakedefine HAVE_UNISTD_H/#ifndef _WIN32\n#define HAVE_UNISTD_H 1\n#endif/' -e 's/#cmakedefine HAVE_STDARG_H/#define HAVE_STDARG_H 1/' -e 's/#cmakedefine Z_HAVE_UNISTD_H/#ifndef _WIN32\n#define Z_HAVE_UNISTD_H 1\n#endif/' src/zconf-ng.h.in > /tmp/zng_inc/zconf-ng.h
+              ZNG_SRCS="src/adler32.c src/compress.c src/crc32.c src/crc32_braid_comb.c src/deflate.c src/deflate_fast.c src/deflate_huff.c src/deflate_medium.c src/deflate_quick.c src/deflate_rle.c src/deflate_slow.c src/deflate_stored.c src/functable.c src/infback.c src/inflate.c src/inftrees.c src/insert_string.c src/insert_string_roll.c src/trees.c src/uncompr.c src/zutil.c src/cpu_features.c src/gzlib.c src/gzread.c src/gzwrite.c src/arch/generic/adler32_c.c src/arch/generic/adler32_fold_c.c src/arch/generic/chunkset_c.c src/arch/generic/compare256_c.c src/arch/generic/crc32_braid_c.c src/arch/generic/crc32_fold_c.c src/arch/generic/slide_hash_c.c src/arch/generic/crc32_chorba_c.c"
+              ZNG_FLAGS="-std=c11 -I/tmp/zng_inc -Isrc -Isrc/arch/generic -DZLIB_COMPAT -DWITH_GZFILEOP -DHAVE_BUILTIN_CTZ -DHAVE_BUILTIN_CTZLL"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $ZNG_FLAGS -DZLIB_DLL -DZLIB_INTERNAL $ZNG_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+          esac
+
+          echo "=== Verifying produced binaries & runtime smoke tests ==="
+          shopt -s nullglob
+          for f in dist/*.dll dist/*.so dist/*.dylib dist/*.wasm dist/*.dll.a; do
+            test -s "$f" || { echo "ERROR: empty artifact $f"; exit 1; }
+            file "$f"
+          done
+
+          cat > /tmp/dlprobe.c <<'EOF'
+          #include <dlfcn.h>
+          #include <stdio.h>
+          int main(int argc, char **argv) {
+            if (argc < 2) return 2;
+            void *h = dlopen(argv[1], RTLD_NOW);
+            if (!h) {
+              fprintf(stderr, "dlopen(%s) failed: %s\n", argv[1], dlerror());
+              return 1;
+            }
+            printf("dlopen(%s) OK\n", argv[1]);
+            dlclose(h);
+            return 0;
+          }
+          EOF
+          zig cc -target x86_64-linux-gnu -O2 /tmp/dlprobe.c -ldl -o /tmp/dlprobe
+          /tmp/dlprobe "dist/${LIB_OUT}-linux-x64.so"
+
+          if [ -f "dist/${LIB_OUT}-wasm32-wasi.wasm" ]; then
+            node -e '
+              const fs = require("node:fs");
+              const p = process.argv[1];
+              const buf = fs.readFileSync(p);
+              if (buf.length < 8 || buf[0] !== 0x00 || buf[1] !== 0x61 || buf[2] !== 0x73 || buf[3] !== 0x6d) {
+                console.error("Invalid WASM magic header in", p);
+                process.exit(1);
+              }
+              console.log("WASM magic \\0asm OK:", p, buf.length, "bytes");
+            ' "dist/${LIB_OUT}-wasm32-wasi.wasm"
+          fi
+
+          (cd dist && sha512sum * > "SHA512SUMS-${LIB_KEY}.txt")
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tier2-sums-${{ matrix.lib }}
+          path: dist/SHA512SUMS-${{ matrix.lib }}.txt
+
+      - name: Upload Tier-2 5-OS Shard Binaries to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.ensure-release.outputs.release_tag }}
+        run: gh release upload "$TAG" dist/* --repo awesome-os/upstream-mirrors --clobber
+
+  finalize-tier2-sums:
+    needs: [ensure-release, build-tier2-5os-shard]
+    if: ${{ !cancelled() && needs.ensure-release.result == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: /tmp/artifacts
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Summarize Tier-1B & Tier-2 Shards & Upload Tier-2 SHA512SUMS
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.ensure-release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const root = "/tmp/artifacts";
+            const resolvedPath = path.join(root, "resolved-tier2-versions", "resolved-tier2-versions.json");
+            const resolved = fs.existsSync(resolvedPath) ? JSON.parse(fs.readFileSync(resolvedPath, "utf8")).libraries : {};
+            const expected = Object.keys(resolved);
+
+            const sumLines = [];
+            const rows = [];
+            let passedCount = 0;
+
+            for (const lib of expected) {
+              const sumFile = path.join(root, `tier2-sums-${lib}`, `SHA512SUMS-${lib}.txt`);
+              if (!fs.existsSync(sumFile)) {
+                rows.push(`| \`${lib}\` | ${resolved[lib].tag} | FAILED | - |`);
+                continue;
+              }
+              const lines = fs.readFileSync(sumFile, "utf8").trim().split(/\r?\n/).filter(Boolean);
+              const targets = [];
+              for (const line of lines) {
+                const [sha, name] = line.trim().split(/\s+/);
+                if (!sha || !name || name.endsWith(".txt")) continue;
+                sumLines.push(`${sha}  ${name}`);
+                if (name.endsWith("-win64.dll")) targets.push("win64");
+                else if (name.endsWith("-linux-x64.so")) targets.push("linux-x64");
+                else if (name.endsWith("-linux-arm64.so")) targets.push("linux-arm64");
+                else if (name.endsWith("-macos-arm64.dylib")) targets.push("macos-arm64");
+                else if (name.endsWith("-wasm32-wasi.wasm")) targets.push("wasm32-wasi");
+              }
+              passedCount++;
+              rows.push(`| \`${lib}\` | ${resolved[lib].tag} | PASS | ${targets.join(", ")} |`);
+            }
+
+            fs.writeFileSync("/tmp/SHA512SUMS-tier2.txt", sumLines.join("\n") + "\n");
+            const summary = [
+              `## Holo 5-OS Tier-1B & Tier-2 Shards (${process.env.TAG})`,
+              "",
+              `- **Passed:** ${passedCount}/${expected.length}`,
+              "",
+              "| Library | Tag | Status | Targets |",
+              "| :--- | :--- | :--- | :--- |",
+              ...rows,
+              ""
+            ].join("\n");
+            fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summary);
+            console.log(summary);
+          '
+          if [ -s /tmp/SHA512SUMS-tier2.txt ]; then
+            gh release upload "$TAG" /tmp/SHA512SUMS-tier2.txt --repo awesome-os/upstream-mirrors --clobber
+          fi
