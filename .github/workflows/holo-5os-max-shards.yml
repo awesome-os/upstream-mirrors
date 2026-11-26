@@ -371,7 +371,7 @@ jobs:
               zig cc -target x86_64-windows-gnu -O2 -shared -s $MI_FLAGS -DMI_WIN_NOREDIRECT=1 src/src/static.c -lpsapi -lshell32 -luser32 -ladvapi32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $MI_FLAGS src/src/static.c -lpthread -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $MI_FLAGS src/src/static.c -lpthread -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC $MI_FLAGS src/src/static.c -lpthread -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $MI_FLAGS -DMAC_OS_X_VERSION_MIN_REQUIRED=101400 src/src/static.c -lpthread -o "dist/${LIB_OUT}-macos-arm64.dylib"
               ;;
           esac
 
