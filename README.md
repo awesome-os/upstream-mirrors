@@ -16,6 +16,14 @@ Each upstream lives on its own dedicated orphan branch (`mirror/<name>`) so `mai
 
 Updated automatically by [`.github/workflows/sync-sparse-mirrors.yml`](.github/workflows/sync-sparse-mirrors.yml).
 
+## Production Max-Version 5-OS Shared + WASI Libraries (`v11-max-5os-latest`)
+
+[`.github/workflows/holo-5os-max-shards.yml`](.github/workflows/holo-5os-max-shards.yml) resolves live pinned upstream versions from [`awesome-os/t2linux-baseline`](https://github.com/awesome-os/t2linux-baseline/blob/main/catalog/live-upstream-tracker.json) and compiles **14 Tier-1 high-overlap libraries** directly from upstream sources using pure `holo-compiler` (`zig cc 0.14.0` / `zig c++ 0.14.0`, zero CMake/Ninja/Make) across **Win64 (`.dll`)**, **Linux x64 (`.so`)**, **Linux ARM64 (`.so`)**, **macOS ARM64 (`.dylib`)**, and **`wasm32-wasi` (`.wasm`)**:
+
+- **C + WASI Reactor (5 targets each):** `zlib`, `zstd`, `libdeflate`, `lz4`, `brotli`, `md4c`, `sqlite3`, `libyaml`, `libwebp`, `expat`
+- **C++ / Native Allocator (4 native OS targets each):** `simdjson`, `simdutf`, `ada`, `mimalloc`
+- **Release & Manifest:** [`v11-max-5os-latest`](https://github.com/awesome-os/upstream-mirrors/releases/tag/v11-max-5os-latest) publishes all verified binaries, `SHA512SUMS.txt`, and `holo-v11-max-5os-manifest.json` (`schema: "holo-v11.max-5os-manifest.v1"`, `abiMagic: "0x33564742"`, `v11/files/<aa>/<sha512>` CAS layout).
+
 ## Quick Install & Run (Windows / Linux / macOS)
 
 ```sh

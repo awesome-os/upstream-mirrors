@@ -1,0 +1,492 @@
+name: Holo 5-OS Max Shards — Pure Zig 0.14.0 Tier-1 Production Libraries
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag for 5-OS max-version shared + WASI libraries'
+        required: true
+        default: 'v11-max-5os-latest'
+  schedule:
+    - cron: '0 6 * * 0'
+  push:
+    branches:
+      - main
+    paths:
+      - '.github/workflows/holo-5os-max-shards.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  ensure-release:
+    runs-on: ubuntu-latest
+    outputs:
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      versions_json: ${{ steps.resolve.outputs.versions_json }}
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Ensure GitHub Release & Resolve Live Pinned Max Versions
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.release_tag || 'v11-max-5os-latest' }}
+        run: |
+          gh release view "$TAG" --repo awesome-os/upstream-mirrors >/dev/null 2>&1 || \
+            gh release create "$TAG" --repo awesome-os/upstream-mirrors \
+              --title "Holo v11 Max 5-OS Shared + WASI Libraries (${TAG})" \
+              --notes "Production max-version 5-OS shared libraries (Win64 .dll, Linux x64/ARM64 .so, macOS ARM64 .dylib, wasm32-wasi .wasm) compiled directly from upstream sources via pure holo-compiler (zig 0.14.0) — zero CMake, zero Ninja, zero Make."
+
+          node -e '
+            const fs = require("node:fs");
+            const defaults = {
+              zlib:       { pkg: "zlib",       libOut: "libz",        repo: "madler/zlib",          tag: "v1.4",     version: "1.4" },
+              zstd:       { pkg: "zstd",       libOut: "libzstd",     repo: "facebook/zstd",        tag: "v1.6.0",   version: "1.6.0" },
+              libdeflate: { pkg: "libdeflate", libOut: "libdeflate",  repo: "ebiggers/libdeflate",  tag: "v1.26",    version: "1.26" },
+              lz4:        { pkg: "lz4",        libOut: "liblz4",      repo: "lz4/lz4",              tag: "v1.11.1",  version: "1.11.1" },
+              brotli:     { pkg: "brotli",     libOut: "libbrotli",   repo: "google/brotli",        tag: "v1.2.1",   version: "1.2.1" },
+              md4c:       { pkg: "md4c",       libOut: "libmd4c",     repo: "mity/md4c",            tag: "v0.6.0",   version: "0.6.0" },
+              sqlite3:    { pkg: "sqlite",     libOut: "libsqlite3",  repo: "sqlite/sqlite",        tag: "version-3.54.1", version: "3.54.1", url: "https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip" },
+              simdjson:   { pkg: "simdjson",   libOut: "libsimdjson", repo: "simdjson/simdjson",    tag: "v5.3.0",   version: "5.3.0" },
+              simdutf:    { pkg: "simdutf",    libOut: "libsimdutf",  repo: "simdutf/simdutf",      tag: "v9.5.0",   version: "9.5.0" },
+              ada:        { pkg: "ada",        libOut: "libada",      repo: "ada-url/ada",          tag: "v4.1.1",   version: "4.1.1" },
+              libyaml:    { pkg: "libyaml",    libOut: "libyaml",     repo: "yaml/libyaml",         tag: "0.2.5",    version: "0.2.5" },
+              libwebp:    { pkg: "libwebp",    libOut: "libwebp",     repo: "webmproject/libwebp",  tag: "v1.6.0",   version: "1.6.0" },
+              expat:      { pkg: "expat",      libOut: "libexpat",    repo: "libexpat/libexpat",    tag: "R_2_11_0", version: "2.11.0" },
+              mimalloc:   { pkg: "mimalloc",   libOut: "libmimalloc", repo: "microsoft/mimalloc",   tag: "v3.7.1",   version: "3.7.1" }
+            };
+
+            (async () => {
+              const resolved = structuredClone(defaults);
+              try {
+                const res = await fetch("https://raw.githubusercontent.com/awesome-os/t2linux-baseline/main/catalog/live-upstream-tracker.json");
+                if (res.ok) {
+                  const tracker = await res.json();
+                  const byPkg = new Map((tracker.libraries || []).map(x => [x.pkg, x]));
+                  for (const [key, cfg] of Object.entries(resolved)) {
+                    const hit = byPkg.get(cfg.pkg);
+                    if (hit && hit.upstreamTag) {
+                      cfg.tag = hit.upstreamTag;
+                      cfg.version = hit.upstreamVersion || hit.upstreamTag.replace(/^v/, "");
+                      if (hit.repo && hit.repo.includes("/")) cfg.repo = hit.repo;
+                    }
+                  }
+                }
+              } catch (err) {
+                console.warn("[warn] tracker fetch failed, using safe defaults:", err.message);
+              }
+
+              // Resolve live libyaml release if available
+              try {
+                const yres = await fetch("https://api.github.com/repos/yaml/libyaml/releases/latest", {
+                  headers: { "User-Agent": "holo-5os-max-shards", "Authorization": "Bearer " + process.env.GH_TOKEN }
+                });
+                if (yres.ok) {
+                  const yjson = await yres.json();
+                  if (yjson.tag_name) {
+                    resolved.libyaml.tag = yjson.tag_name;
+                    resolved.libyaml.version = yjson.tag_name.replace(/^v/, "");
+                  }
+                }
+              } catch (err) {
+                console.warn("[warn] libyaml release lookup failed:", err.message);
+              }
+
+              // Dynamically resolve latest SQLite3 amalgamation URL
+              try {
+                const sres = await fetch("https://www.sqlite.org/download.html");
+                if (sres.ok) {
+                  const html = await sres.text();
+                  const m = html.match(/(\d{4}\/sqlite-amalgamation-(\d+)\.zip)/);
+                  if (m) {
+                    resolved.sqlite3.url = "https://www.sqlite.org/" + m[1];
+                    const n = m[2];
+                    if (n.length === 7) {
+                      const maj = Number(n.slice(0, 1));
+                      const min = Number(n.slice(1, 3));
+                      const pat = Number(n.slice(3, 5));
+                      resolved.sqlite3.version = `${maj}.${min}.${pat}`;
+                      resolved.sqlite3.tag = `version-${resolved.sqlite3.version}`;
+                    }
+                  }
+                }
+              } catch (err) {
+                console.warn("[warn] sqlite.org lookup failed, using fallback:", err.message);
+              }
+
+              const payload = {
+                schema: "holo-v11.resolved-versions.v1",
+                resolvedAt: new Date().toISOString(),
+                releaseTag: process.env.TAG,
+                libraries: resolved
+              };
+              fs.writeFileSync("resolved-versions.json", JSON.stringify(payload, null, 2) + "\n");
+              const compact = JSON.stringify(resolved);
+              const outFile = process.env.GITHUB_OUTPUT;
+              fs.appendFileSync(outFile, `release_tag=${process.env.TAG}\n`);
+              fs.appendFileSync(outFile, `versions_json=${compact}\n`);
+              console.log("Resolved 14 Tier-1 libraries:", JSON.stringify(resolved, null, 2));
+            })().catch(e => { console.error(e); process.exit(1); });
+          '
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: resolved-versions
+          path: resolved-versions.json
+
+  build-max-5os-shard:
+    needs: ensure-release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        lib:
+          - zlib
+          - zstd
+          - libdeflate
+          - lz4
+          - brotli
+          - md4c
+          - sqlite3
+          - simdjson
+          - simdutf
+          - ada
+          - libyaml
+          - libwebp
+          - expat
+          - mimalloc
+    steps:
+      - uses: goto-bus-stop/setup-zig@v2
+        with:
+          version: 0.14.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Compile ${{ matrix.lib }} (Max Version) for 5 OS Targets via Pure Zig 0.14.0
+        env:
+          LIB_KEY: ${{ matrix.lib }}
+          VERSIONS_JSON: ${{ needs.ensure-release.outputs.versions_json }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          eval "$(node -e '
+            const v = JSON.parse(process.env.VERSIONS_JSON)[process.env.LIB_KEY];
+            console.log(`UP_REPO=${JSON.stringify(v.repo)}`);
+            console.log(`UP_TAG=${JSON.stringify(v.tag)}`);
+            console.log(`UP_VER=${JSON.stringify(v.version)}`);
+            console.log(`LIB_OUT=${JSON.stringify(v.libOut)}`);
+            console.log(`SQ_URL=${JSON.stringify(v.url || "")}`);
+          ')"
+          echo "=== Building ${LIB_KEY} (${LIB_OUT}) @ ${UP_REPO} ${UP_TAG} (${UP_VER}) ==="
+
+          mkdir -p src dist
+
+          compile_5os_c() {
+            local out="$1"; shift
+            zig cc -target x86_64-windows-gnu -O2 -shared -s "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
+            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
+            zig cc -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
+            zig cc -target wasm32-wasi        -O2 -mexec-model=reactor "$@" -o "dist/${out}-wasm32-wasi.wasm"
+          }
+
+          compile_4os_cxx() {
+            local out="$1"; shift
+            zig c++ -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig c++ -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
+            zig c++ -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
+            zig c++ -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
+          }
+
+          clone_tag() {
+            git clone --depth=1 --branch "$UP_TAG" "https://github.com/${UP_REPO}.git" src
+          }
+
+          case "$LIB_KEY" in
+            zlib)
+              clone_tag
+              SRCS=$(find src -maxdepth 1 -name '*.c' | sort)
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -Isrc -DZLIB_DLL -DZLIB_INTERNAL $SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s -Isrc -DHAVE_STDARG_H -DHAVE_UNISTD_H $SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s -Isrc -DHAVE_STDARG_H -DHAVE_UNISTD_H $SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC -Isrc -DHAVE_STDARG_H -DHAVE_UNISTD_H $SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor -Isrc -DHAVE_STDARG_H -DHAVE_UNISTD_H $SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            zstd)
+              clone_tag
+              SRCS=$(find src/lib/common src/lib/compress src/lib/decompress -name '*.c' | sort)
+              ZSTD_FLAGS="-Isrc/lib -Isrc/lib/common -DZSTD_MULTITHREAD=0 -DZSTD_DISABLE_ASM -DXXH_NAMESPACE=ZSTD_"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $ZSTD_FLAGS -DZSTD_DLL_EXPORT=1 $SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $ZSTD_FLAGS $SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $ZSTD_FLAGS $SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $ZSTD_FLAGS $SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $ZSTD_FLAGS $SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            libdeflate)
+              clone_tag
+              SRCS=$(find src/lib -maxdepth 1 -name '*.c' | sort)
+              SRCS_ARM=$(find src/lib/arm -name '*.c' | sort)
+              SRCS_X86=$(find src/lib/x86 -name '*.c' | sort)
+              compile_5os_c "$LIB_OUT" -Isrc -Isrc/lib $SRCS $SRCS_ARM $SRCS_X86
+              ;;
+
+            lz4)
+              clone_tag
+              compile_5os_c "$LIB_OUT" -Isrc/lib src/lib/lz4.c src/lib/lz4hc.c src/lib/lz4frame.c src/lib/xxhash.c
+              ;;
+
+            brotli)
+              clone_tag
+              SRCS=$(find src/c/common src/c/dec src/c/enc -name '*.c' | sort)
+              compile_5os_c "$LIB_OUT" -Isrc/c/include -Isrc/c -DBROTLI_SHARED_COMPILATION -DBROTLI_BUILD_COMMON_LIBRARY -DBROTLI_BUILD_DECODER_LIBRARY -DBROTLI_BUILD_ENCODER_LIBRARY $SRCS -lm
+              ;;
+
+            md4c)
+              clone_tag
+              compile_5os_c "$LIB_OUT" -Isrc/src src/src/md4c.c src/src/md4c-html.c src/src/entity.c
+              ;;
+
+            sqlite3)
+              mkdir -p /tmp/sq
+              if ! curl -fsSL "$SQ_URL" -o /tmp/sq/sq.zip; then
+                curl -fsSL "https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip" -o /tmp/sq/sq.zip
+              fi
+              unzip -q /tmp/sq/sq.zip -d /tmp/sq
+              SQ_C=$(find /tmp/sq -maxdepth 2 -name sqlite3.c | head -n 1)
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=1 "$SQ_C" -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=1 "$SQ_C" -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=1 "$SQ_C" -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=1 "$SQ_C" -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION=1 -D_WASI_EMULATED_MMAN -lwasi-emulated-mman "$SQ_C" -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            simdjson)
+              mkdir -p /tmp/sj
+              if curl -fsSL "https://github.com/${UP_REPO}/releases/download/${UP_TAG}/singleheader.zip" -o /tmp/sj/singleheader.zip; then
+                unzip -q /tmp/sj/singleheader.zip -d /tmp/sj
+                SJ_INC=/tmp/sj
+              else
+                clone_tag
+                SJ_INC=src/singleheader
+              fi
+              compile_4os_cxx "$LIB_OUT" -std=c++17 "-I${SJ_INC}" "${SJ_INC}/simdjson.cpp"
+              ;;
+
+            simdutf)
+              mkdir -p /tmp/su
+              if curl -fsSL "https://github.com/${UP_REPO}/releases/download/${UP_TAG}/singleheader.zip" -o /tmp/su/singleheader.zip; then
+                unzip -q /tmp/su/singleheader.zip -d /tmp/su
+                SU_INC=/tmp/su
+              else
+                clone_tag
+                SU_INC=src/singleheader
+              fi
+              compile_4os_cxx "$LIB_OUT" -std=c++17 "-I${SU_INC}" "${SU_INC}/simdutf.cpp"
+              ;;
+
+            ada)
+              mkdir -p /tmp/ada_sh
+              if curl -fsSL "https://github.com/${UP_REPO}/releases/download/${UP_TAG}/singleheader.zip" -o /tmp/ada_sh/singleheader.zip; then
+                unzip -q /tmp/ada_sh/singleheader.zip -d /tmp/ada_sh
+                ADA_INC=/tmp/ada_sh
+              else
+                clone_tag
+                ADA_INC=src/singleheader
+              fi
+              compile_4os_cxx "$LIB_OUT" -std=c++20 "-I${ADA_INC}" "${ADA_INC}/ada.cpp"
+              ;;
+
+            libyaml)
+              clone_tag
+              mkdir -p /tmp/yaml_inc
+              IFS='.' read -r Y_MAJ Y_MIN Y_PAT <<< "${UP_VER%%-*}"
+              Y_MAJ=${Y_MAJ:-0}; Y_MIN=${Y_MIN:-2}; Y_PAT=${Y_PAT:-5}
+              cat > /tmp/yaml_inc/config.h <<EOF
+          #ifndef CONFIG_H
+          #define CONFIG_H
+          #define YAML_VERSION_MAJOR ${Y_MAJ}
+          #define YAML_VERSION_MINOR ${Y_MIN}
+          #define YAML_VERSION_PATCH ${Y_PAT}
+          #define YAML_VERSION_STRING "${UP_VER}"
+          #endif
+          EOF
+              SRCS=$(find src/src -maxdepth 1 -name '*.c' | sort)
+              compile_5os_c "$LIB_OUT" -I/tmp/yaml_inc -Isrc/include -Isrc/src -DHAVE_CONFIG_H -DYAML_DECLARE_EXPORT -DYAML_VERSION_MAJOR=${Y_MAJ} -DYAML_VERSION_MINOR=${Y_MIN} -DYAML_VERSION_PATCH=${Y_PAT} "-DYAML_VERSION_STRING=\"${UP_VER}\"" $SRCS
+              ;;
+
+            libwebp)
+              clone_tag
+              SRCS=$(find src/src/dec src/src/dsp src/src/enc src/src/utils src/src/demux src/sharpyuv -name '*.c' | sort)
+              compile_5os_c "$LIB_OUT" -Isrc -Isrc/src -DWEBP_DLL $SRCS -lm
+              ;;
+
+            expat)
+              clone_tag
+              mkdir -p /tmp/expat_inc
+              cat > /tmp/expat_inc/expat_config.h <<'EOF'
+          #ifndef EXPAT_CONFIG_H
+          #define EXPAT_CONFIG_H
+          #define BYTEORDER 1234
+          #define HAVE_MEMMOVE 1
+          #define HAVE_STDINT_H 1
+          #define HAVE_STDLIB_H 1
+          #define HAVE_STRING_H 1
+          #define XML_NS 1
+          #define XML_DTD 1
+          #define XML_GE 1
+          #define XML_CONTEXT_BYTES 1024
+          #if defined(_WIN32)
+          #define HAVE_RAND_S 1
+          #elif defined(__APPLE__)
+          #define HAVE_ARC4RANDOM_BUF 1
+          #elif defined(__wasi__)
+          #define HAVE_GETENTROPY 1
+          #else
+          #define HAVE_GETRANDOM 1
+          #endif
+          #endif
+          EOF
+              EXPAT_BASE="-I/tmp/expat_inc -Isrc/expat/lib -DHAVE_EXPAT_CONFIG_H -DXML_ENABLE_VISIBILITY=1 src/expat/lib/xmlparse.c src/expat/lib/xmlrole.c src/expat/lib/xmltok.c src/expat/lib/xcs.c"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $EXPAT_BASE src/expat/lib/random_rand_s.c -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $EXPAT_BASE src/expat/lib/random_getrandom.c -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $EXPAT_BASE src/expat/lib/random_getrandom.c -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $EXPAT_BASE src/expat/lib/random_arc4random_buf.c -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $EXPAT_BASE src/expat/lib/random_getentropy.c -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              ;;
+
+            mimalloc)
+              clone_tag
+              MI_FLAGS="-Isrc/include -DMI_SHARED_LIB -DMI_SHARED_LIB_EXPORT"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $MI_FLAGS src/src/static.c -lpsapi -lshell32 -luser32 -ladvapi32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $MI_FLAGS src/src/static.c -lpthread -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $MI_FLAGS src/src/static.c -lpthread -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $MI_FLAGS src/src/static.c -lpthread -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              ;;
+          esac
+
+          echo "=== Verifying produced binaries & magic bytes ==="
+          shopt -s nullglob
+          for f in dist/*.dll dist/*.so dist/*.dylib dist/*.wasm dist/*.dll.a; do
+            test -s "$f" || { echo "ERROR: empty artifact $f"; exit 1; }
+            file "$f"
+          done
+
+          (cd dist && sha512sum * > "SHA512SUMS-${LIB_KEY}.txt")
+          ls -lh dist/
+
+      - name: Upload Max 5-OS Shard Binaries to GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.ensure-release.outputs.release_tag }}
+        run: gh release upload "$TAG" dist/* --repo awesome-os/upstream-mirrors --clobber
+
+  emit-v11-max-5os-manifest:
+    needs: [ensure-release, build-max-5os-shard]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: resolved-versions
+          path: /tmp/meta
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Emit Combined SHA512SUMS.txt & holo-v11-max-5os-manifest.json
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.ensure-release.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sums /tmp/out
+          gh release download "$TAG" --repo awesome-os/upstream-mirrors --pattern "SHA512SUMS-*.txt" --dir /tmp/sums --clobber
+          gh release view "$TAG" --repo awesome-os/upstream-mirrors --json assets > /tmp/meta/release-assets.json
+
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const tag = process.env.TAG;
+            const resolved = JSON.parse(fs.readFileSync("/tmp/meta/resolved-versions.json", "utf8")).libraries;
+            const assetsJson = JSON.parse(fs.readFileSync("/tmp/meta/release-assets.json", "utf8"));
+            const assetSizeMap = new Map((assetsJson.assets || []).map(a => [a.name, a.size]));
+
+            const allLines = [];
+            const libraries = [];
+            let totalBinaries = 0;
+
+            const targetOf = (filename) => {
+              if (filename.endsWith("-win64.dll")) return "win64";
+              if (filename.endsWith("-win64.dll.a")) return "win64-implib";
+              if (filename.endsWith("-linux-x64.so")) return "linux-x64";
+              if (filename.endsWith("-linux-arm64.so")) return "linux-arm64";
+              if (filename.endsWith("-macos-arm64.dylib")) return "macos-arm64";
+              if (filename.endsWith("-wasm32-wasi.wasm")) return "wasm32-wasi";
+              return "unknown";
+            };
+
+            for (const f of fs.readdirSync("/tmp/sums").sort()) {
+              const m = f.match(/^SHA512SUMS-(.+)\.txt$/);
+              if (!m) continue;
+              const libKey = m[1];
+              const meta = resolved[libKey] || { pkg: libKey, libOut: "lib" + libKey, repo: "unknown", tag: "unknown", version: "unknown" };
+              const lines = fs.readFileSync(path.join("/tmp/sums", f), "utf8").trim().split(/\r?\n/).filter(Boolean);
+              const binaries = [];
+              const importLibs = [];
+              for (const line of lines) {
+                const [sha512, filename] = line.trim().split(/\s+/);
+                if (!sha512 || !filename || filename.endsWith(".txt")) continue;
+                allLines.push(`${sha512}  ${filename}`);
+                const target = targetOf(filename);
+                const entry = {
+                  filename,
+                  target,
+                  size: assetSizeMap.get(filename) ?? null,
+                  sha512,
+                  v11CasPath: `v11/files/${sha512.slice(0, 2)}/${sha512}`,
+                  downloadUrl: `https://github.com/awesome-os/upstream-mirrors/releases/download/${tag}/${filename}`
+                };
+                if (target === "win64-implib") {
+                  importLibs.push(entry);
+                } else {
+                  binaries.push(entry);
+                  totalBinaries++;
+                }
+              }
+              libraries.push({
+                lib: libKey,
+                pkg: meta.pkg,
+                libOut: meta.libOut,
+                repo: meta.repo,
+                tag: meta.tag,
+                version: meta.version,
+                targets: binaries.map(b => b.target),
+                binaries,
+                importLibs
+              });
+            }
+
+            fs.writeFileSync("/tmp/out/SHA512SUMS.txt", allLines.join("\n") + "\n");
+            const manifest = {
+              schema: "holo-v11.max-5os-manifest.v1",
+              abiMagic: "0x33564742",
+              compiler: "holo-compiler (zig 0.14.0)",
+              tag,
+              generatedAt: new Date().toISOString(),
+              totalLibraries: libraries.length,
+              totalBinaries,
+              libraries
+            };
+            fs.writeFileSync("/tmp/out/holo-v11-max-5os-manifest.json", JSON.stringify(manifest, null, 2) + "\n");
+            console.log(`[holo-5os-max] Emitted manifest: ${libraries.length} libraries, ${totalBinaries} binaries`);
+          '
+
+          gh release upload "$TAG" /tmp/out/SHA512SUMS.txt /tmp/out/holo-v11-max-5os-manifest.json --repo awesome-os/upstream-mirrors --clobber
