@@ -189,8 +189,8 @@ jobs:
 
           compile_5os_c() {
             local out="$1"; shift
-            zig cc -target x86_64-windows-gnu -O2 -shared -s "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
-            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
+            zig cc -target x86_64-windows-gnu -O2 -mevex512 -shared -s "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig cc -target x86_64-linux-gnu   -O2 -mevex512 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
             zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
             zig cc -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
             zig cc -target wasm32-wasi        -O2 -mexec-model=reactor "$@" -o "dist/${out}-wasm32-wasi.wasm"
@@ -198,8 +198,8 @@ jobs:
 
           compile_4os_cxx() {
             local out="$1"; shift
-            zig c++ -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
-            zig c++ -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
+            zig c++ -target x86_64-windows-gnu -O2 -mevex512 -shared -s -Wl,--export-all-symbols "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig c++ -target x86_64-linux-gnu   -O2 -mevex512 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
             zig c++ -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
             zig c++ -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
           }
@@ -301,7 +301,10 @@ jobs:
                 clone_tag
                 ADA_INC=src/singleheader
               fi
-              compile_4os_cxx "$LIB_OUT" -std=c++20 "-I${ADA_INC}" "${ADA_INC}/ada.cpp"
+              zig c++ -target x86_64-windows-gnu -O2 -mssse3 -shared -s -Wl,--export-all-symbols -std=c++20 "-I${ADA_INC}" "${ADA_INC}/ada.cpp" -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig c++ -target x86_64-linux-gnu   -O2 -mssse3 -shared -fPIC -s -std=c++20 "-I${ADA_INC}" "${ADA_INC}/ada.cpp" -o "dist/${LIB_OUT}-linux-x64.so"
+              zig c++ -target aarch64-linux-gnu  -O2 -shared -fPIC -s -std=c++20 "-I${ADA_INC}" "${ADA_INC}/ada.cpp" -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig c++ -target aarch64-macos      -O2 -shared -fPIC -std=c++20 "-I${ADA_INC}" "${ADA_INC}/ada.cpp" -o "dist/${LIB_OUT}-macos-arm64.dylib"
               ;;
 
             libyaml)
@@ -364,8 +367,8 @@ jobs:
 
             mimalloc)
               clone_tag
-              MI_FLAGS="-Isrc/include -DMI_SHARED_LIB -DMI_SHARED_LIB_EXPORT"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s $MI_FLAGS src/src/static.c -lpsapi -lshell32 -luser32 -ladvapi32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              MI_FLAGS="-Isrc/include -DMI_SHARED_LIB=1 -DMI_SHARED_LIB_EXPORT=1"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $MI_FLAGS -DMI_WIN_NOREDIRECT=1 src/src/static.c -lpsapi -lshell32 -luser32 -ladvapi32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $MI_FLAGS src/src/static.c -lpthread -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $MI_FLAGS src/src/static.c -lpthread -o "dist/${LIB_OUT}-linux-arm64.so"
               zig cc -target aarch64-macos      -O2 -shared -fPIC $MI_FLAGS src/src/static.c -lpthread -o "dist/${LIB_OUT}-macos-arm64.dylib"
