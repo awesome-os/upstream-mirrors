@@ -20,9 +20,9 @@
 3. **Stage 3 — Parallel Independent Shards & Damped Gravity Builds (Free Cloud Runners):**
    - Independent C/C++ engines fan out **in parallel** on free `ubuntu-latest` (`~2 min` wall-clock for all 10 shards).
    - Heavy engines (`V8`, `Chromium`) use **component builds (`is_component_build = true`)** + **Damped Gravity** bounded drops (`compile -> checkpoint -> bounce`) so only finished shared libraries (`.so`/`.dll`/`.dylib`) are carried forward — keeping per-drop disk well inside free cloud runners.
-4. **Stage 4 — Central `GhostModuleRegistry` & `RollingReleaseManifest.json`:**
-   - Every compiled shared library is addressed by its **human-readable name + exact SHA-256** (`<cas>/<sha256>/<filename>`).
-   - **`b8g-ghost`** (`~10 KB` `.so` / `~23 KB` `.dll` / `~52 KB` Darwin `.dylib`) hydrates missing libraries automatically from the central registry on first load and shares them once in OS RAM across all apps.
+4. **Stage 4 — Central Holo `v11` CAS (`awesome-os/holo-v11`) & `RollingReleaseManifest.json`:**
+   - Every compiled shared library is addressed by its **exact SHA-512** (`~/.b8g/cas/v11/files/<aa>/<sha512>`) and indexed in `awesome-os/holo-v11`.
+   - **`holo-pm` / `holo-ffi`** hydrates missing libraries automatically from the unified `v11` registry on first load and shares them via 0-byte hardlinks and OS RAM across all apps (`dup_v8 = 0 B`, coordinated via `awesome-os/chromium-baseline`).
    - `sectium-browser`'s `baseline-release.yml` assembles the unified baseline (`RollingReleaseManifest.json` + `SHA256SUMS.txt` + `previous_tag` for $O(1)$ rollback) in ~21 seconds.
 
 ---
