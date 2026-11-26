@@ -17,6 +17,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   ensure-release:
@@ -138,10 +140,10 @@ jobs:
           set -euo pipefail
           eval "$(node -e '
             const v = JSON.parse(process.env.VERSIONS_JSON)[process.env.LIB_KEY];
-            console.log(`UP_REPO=${JSON.stringify(v.repo)}`);
-            console.log(`UP_TAG=${JSON.stringify(v.tag)}`);
-            console.log(`UP_VER=${JSON.stringify(v.version)}`);
-            console.log(`LIB_OUT=${JSON.stringify(v.libOut)}`);
+            console.log(`export UP_REPO=${JSON.stringify(v.repo)}`);
+            console.log(`export UP_TAG=${JSON.stringify(v.tag)}`);
+            console.log(`export UP_VER=${JSON.stringify(v.version)}`);
+            console.log(`export LIB_OUT=${JSON.stringify(v.libOut)}`);
           ')"
           echo "=== Building ${LIB_KEY} (${LIB_OUT}) @ ${UP_REPO} ${UP_TAG} (${UP_VER}) ==="
 
@@ -178,50 +180,20 @@ jobs:
 
           case "$LIB_KEY" in
             mbedtls)
-              rm -rf src && mkdir -p /tmp/mbed src
-              TAR_URL="https://github.com/${UP_REPO}/releases/download/${UP_TAG}/${UP_TAG}.tar.bz2"
-              if ! curl -fsSL "$TAR_URL" -o /tmp/mbed/mbedtls.tar.bz2; then
-                echo "[warn] ${UP_TAG} tarball failed, falling back to mbedtls-3.6.8"
-                curl -fsSL "https://github.com/Mbed-TLS/mbedtls/releases/download/mbedtls-3.6.8/mbedtls-3.6.8.tar.bz2" -o /tmp/mbed/mbedtls.tar.bz2
+              rm -rf src && mkdir -p src
+              # Mbed TLS 3.6.x LTS has a flat self-contained library/*.c layout ideal for pure Zig 0.14.0 cross-compile
+              if ! git clone --depth=1 --branch "${UP_TAG}" "https://github.com/${UP_REPO}.git" src || [ -d src/tf-psa-crypto ]; then
+                rm -rf src && mkdir -p src
+                git clone --depth=1 --branch "v3.6.8" "https://github.com/Mbed-TLS/mbedtls.git" src
               fi
-              tar -xjf /tmp/mbed/mbedtls.tar.bz2 -C src --strip-components=1
-
-              if [ -d src/tf-psa-crypto ]; then
-                # mbedtls v4.x split layout
-                if [ ! -f src/library/error.c ] && [ -f src/scripts/generate_errors.pl ]; then
-                  (cd src && perl scripts/generate_errors.pl tf-psa-crypto/drivers/builtin/include/mbedtls include/mbedtls scripts/data_files library/error.c || true)
-                fi
-                if [ ! -f src/library/version_features.c ] && [ -f src/scripts/generate_features.pl ]; then
-                  (cd src && perl scripts/generate_features.pl include/mbedtls scripts/data_files library/version_features.c || true)
-                fi
-                if [ ! -f src/library/ssl_debug_helpers_generated.c ] && [ -f src/framework/scripts/generate_ssl_debug_helpers.py ]; then
-                  (cd src && python3 framework/scripts/generate_ssl_debug_helpers.py --mbedtls-root . library || true)
-                fi
-                if [ -f src/scripts/generate_config_checks.py ]; then
-                  (cd src && python3 scripts/generate_config_checks.py library || true)
-                fi
-                if [ -f src/tf-psa-crypto/scripts/generate_driver_wrappers.py ]; then
-                  (cd src/tf-psa-crypto && python3 scripts/generate_driver_wrappers.py core || true)
-                fi
-                MBED_INCS="-Isrc/include -Isrc/library -Isrc/tf-psa-crypto/include -Isrc/tf-psa-crypto/core -Isrc/tf-psa-crypto/drivers/builtin/include -Isrc/tf-psa-crypto/drivers/builtin/src -Isrc/tf-psa-crypto/drivers/everest/include"
-                SRCS_ALL=$(find src/library src/tf-psa-crypto/core src/tf-psa-crypto/drivers/builtin/src -maxdepth 1 -name '*.c' | sort)
-                SRCS_NOWASI=$(echo "$SRCS_ALL" | grep -vE '/(net_sockets|timing)\.c$')
-                zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $MBED_INCS $SRCS_ALL -lws2_32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-                zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-x64.so"
-                zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-arm64.so"
-                zig cc -target aarch64-macos      -O2 -shared -fPIC $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-macos-arm64.dylib"
-                zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $MBED_INCS -DMBEDTLS_NO_PLATFORM_ENTROPY $SRCS_NOWASI -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
-              else
-                # mbedtls v3.6.x layout
-                MBED_INCS="-Isrc/include -Isrc/library"
-                SRCS_ALL=$(find src/library -maxdepth 1 -name '*.c' | sort)
-                SRCS_NOWASI=$(echo "$SRCS_ALL" | grep -vE '/(net_sockets|timing)\.c$')
-                zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $MBED_INCS $SRCS_ALL -lws2_32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-                zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-x64.so"
-                zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-arm64.so"
-                zig cc -target aarch64-macos      -O2 -shared -fPIC $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-macos-arm64.dylib"
-                zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $MBED_INCS -DMBEDTLS_NO_PLATFORM_ENTROPY $SRCS_NOWASI -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
-              fi
+              MBED_INCS="-Isrc/include -Isrc/library"
+              SRCS_ALL=$(find src/library -maxdepth 1 -name '*.c' | sort)
+              SRCS_NOWASI=$(echo "$SRCS_ALL" | grep -vE '/(net_sockets|timing)\.c$')
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $MBED_INCS $SRCS_ALL -lws2_32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $MBED_INCS -DMBEDTLS_NO_PLATFORM_ENTROPY $SRCS_NOWASI -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             llhttp)
@@ -479,7 +451,7 @@ jobs:
           #endif
           EOF
               CARES_SRCS=$(find src/src/lib -name '*.c' | sort)
-              CARES_FLAGS="-I/tmp/cares_inc -Isrc/include -Isrc/src/lib -DHAVE_CONFIG_H=1 -DCARES_BUILDING_LIBRARY"
+              CARES_FLAGS="-I/tmp/cares_inc -Isrc/include -Isrc/src/lib -Isrc/src/lib/include -Isrc/src/lib/util -Isrc/src/lib/dsa -DHAVE_CONFIG_H=1 -DCARES_BUILDING_LIBRARY"
               zig cc -target x86_64-windows-gnu -O2 -shared -s $CARES_FLAGS $CARES_SRCS -lws2_32 -liphlpapi -ladvapi32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
@@ -513,7 +485,7 @@ jobs:
               cp src/scripts/pnglibconf.h.prebuilt src/pnglibconf.h
               git clone --depth=1 https://github.com/madler/zlib.git /tmp/zlib_src
               PNG_SRCS=$(find src -maxdepth 1 -name 'png*.c' ! -name 'pngtest.c' | sort)
-              ZLIB_SRCS=$(find /tmp/zlib_src -maxdepth 1 -name '*.c' | sort)
+              ZLIB_SRCS=$(find /tmp/zlib_src -maxdepth 1 -name '*.c' ! -name 'gz*.c' | sort)
               PNG_FLAGS="-Isrc -I/tmp/zlib_src -DPNG_ARM_NEON_OPT=0 -DPNG_INTEL_SSE_OPT=0"
               zig cc -target x86_64-windows-gnu -O2 -shared -s $PNG_FLAGS -DPNG_BUILD_DLL $PNG_SRCS $ZLIB_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
@@ -538,8 +510,21 @@ jobs:
 
             freetype)
               clone_tag
-              FT_SRCS="src/src/base/ftbase.c src/src/base/ftinit.c src/src/base/ftsystem.c src/src/base/ftdebug.c src/src/truetype/truetype.c src/src/sfnt/sfnt.c src/src/smooth/smooth.c src/src/autofit/autofit.c src/src/cff/cff.c src/src/psnames/psnames.c src/src/pshinter/pshinter.c src/src/raster/raster.c"
-              FT_FLAGS="-Isrc/include -DFT2_BUILD_LIBRARY"
+              mkdir -p /tmp/ft_inc/freetype/config
+              cat > /tmp/ft_inc/freetype/config/ftmodule.h <<'EOF'
+          FT_USE_MODULE( FT_Module_Class, autofit_module_class )
+          FT_USE_MODULE( FT_Driver_ClassRec, tt_driver_class )
+          FT_USE_MODULE( FT_Driver_ClassRec, cff_driver_class )
+          FT_USE_MODULE( FT_Driver_ClassRec, t1cid_driver_class )
+          FT_USE_MODULE( FT_Module_Class, psaux_module_class )
+          FT_USE_MODULE( FT_Module_Class, pshinter_module_class )
+          FT_USE_MODULE( FT_Module_Class, psnames_module_class )
+          FT_USE_MODULE( FT_Renderer_Class, ft_raster1_renderer_class )
+          FT_USE_MODULE( FT_Renderer_Class, ft_smooth_renderer_class )
+          FT_USE_MODULE( FT_Module_Class, sfnt_module_class )
+          EOF
+              FT_SRCS="src/src/base/ftbase.c src/src/base/ftinit.c src/src/base/ftsystem.c src/src/base/ftdebug.c src/src/truetype/truetype.c src/src/sfnt/sfnt.c src/src/smooth/smooth.c src/src/autofit/autofit.c src/src/cff/cff.c src/src/cid/type1cid.c src/src/psaux/psaux.c src/src/psnames/psnames.c src/src/pshinter/pshinter.c src/src/raster/raster.c"
+              FT_FLAGS="-I/tmp/ft_inc -Isrc/include -DFT2_BUILD_LIBRARY"
               zig cc -target x86_64-windows-gnu -O2 -shared -s $FT_FLAGS -DDLL_EXPORT $FT_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-arm64.so"
@@ -606,12 +591,12 @@ jobs:
               mkdir -p /tmp/zng_inc
               cp src/zlib_name_mangling.h.empty /tmp/zng_inc/zlib_name_mangling.h
               cp src/zlib_name_mangling.h.empty /tmp/zng_inc/zlib_name_mangling-ng.h
-              cp src/zlib.h.in /tmp/zng_inc/zlib.h
-              cp src/zlib-ng.h.in /tmp/zng_inc/zlib-ng.h
+              sed 's/@ZLIB_SYMBOL_PREFIX@//g' src/zlib.h.in > /tmp/zng_inc/zlib.h
+              sed 's/@ZLIB_SYMBOL_PREFIX@//g' src/zlib-ng.h.in > /tmp/zng_inc/zlib-ng.h
               sed -e 's/@ZLIB_SYMBOL_PREFIX@//g' -e 's/#cmakedefine HAVE_UNISTD_H/#ifndef _WIN32\n#define HAVE_UNISTD_H 1\n#endif/' -e 's/#cmakedefine HAVE_STDARG_H/#define HAVE_STDARG_H 1/' -e 's/#cmakedefine Z_HAVE_UNISTD_H/#ifndef _WIN32\n#define Z_HAVE_UNISTD_H 1\n#endif/' src/zconf.h.in > /tmp/zng_inc/zconf.h
               sed -e 's/@ZLIB_SYMBOL_PREFIX@//g' -e 's/#cmakedefine HAVE_UNISTD_H/#ifndef _WIN32\n#define HAVE_UNISTD_H 1\n#endif/' -e 's/#cmakedefine HAVE_STDARG_H/#define HAVE_STDARG_H 1/' -e 's/#cmakedefine Z_HAVE_UNISTD_H/#ifndef _WIN32\n#define Z_HAVE_UNISTD_H 1\n#endif/' src/zconf-ng.h.in > /tmp/zng_inc/zconf-ng.h
-              ZNG_SRCS="src/adler32.c src/compress.c src/crc32.c src/crc32_braid_comb.c src/deflate.c src/deflate_fast.c src/deflate_huff.c src/deflate_medium.c src/deflate_quick.c src/deflate_rle.c src/deflate_slow.c src/deflate_stored.c src/functable.c src/infback.c src/inflate.c src/inftrees.c src/insert_string.c src/insert_string_roll.c src/trees.c src/uncompr.c src/zutil.c src/cpu_features.c src/gzlib.c src/gzread.c src/gzwrite.c src/arch/generic/adler32_c.c src/arch/generic/adler32_fold_c.c src/arch/generic/chunkset_c.c src/arch/generic/compare256_c.c src/arch/generic/crc32_braid_c.c src/arch/generic/crc32_fold_c.c src/arch/generic/slide_hash_c.c src/arch/generic/crc32_chorba_c.c"
-              ZNG_FLAGS="-std=c11 -I/tmp/zng_inc -Isrc -Isrc/arch/generic -DZLIB_COMPAT -DWITH_GZFILEOP -DHAVE_BUILTIN_CTZ -DHAVE_BUILTIN_CTZLL"
+              ZNG_SRCS="src/adler32.c src/compress.c src/crc32.c src/crc32_braid_comb.c src/deflate.c src/deflate_fast.c src/deflate_huff.c src/deflate_medium.c src/deflate_quick.c src/deflate_rle.c src/deflate_slow.c src/deflate_stored.c src/functable.c src/infback.c src/inflate.c src/inftrees.c src/insert_string.c src/insert_string_roll.c src/trees.c src/uncompr.c src/zutil.c src/cpu_features.c src/arch/generic/adler32_c.c src/arch/generic/adler32_fold_c.c src/arch/generic/chunkset_c.c src/arch/generic/compare256_c.c src/arch/generic/crc32_braid_c.c src/arch/generic/crc32_fold_c.c src/arch/generic/slide_hash_c.c src/arch/generic/crc32_chorba_c.c"
+              ZNG_FLAGS="-std=c11 -I/tmp/zng_inc -Isrc -Isrc/arch/generic -DZLIB_COMPAT -DHAVE_BUILTIN_CTZ -DHAVE_BUILTIN_CTZLL"
               zig cc -target x86_64-windows-gnu -O2 -shared -s $ZNG_FLAGS -DZLIB_DLL -DZLIB_INTERNAL $ZNG_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
@@ -742,3 +727,9 @@ jobs:
           if [ -s /tmp/SHA512SUMS-tier2.txt ]; then
             gh release upload "$TAG" /tmp/SHA512SUMS-tier2.txt --repo awesome-os/upstream-mirrors --clobber
           fi
+
+      - name: Attest SLSA Build Provenance for Tier-1B & Tier-2 Checksums
+        if: ${{ hashFiles('/tmp/SHA512SUMS-tier2.txt') != '' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: '/tmp/SHA512SUMS-tier2.txt'
