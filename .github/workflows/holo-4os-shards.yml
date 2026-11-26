@@ -122,14 +122,14 @@ jobs:
           TAG: ${{ inputs.release_tag || 'v0.2.0-holo-5os' }}
         run: gh release upload "$TAG" dist/* --repo awesome-os/upstream-mirrors --clobber
 
-  emit-4os-ghost-manifest:
+  emit-5os-holo-manifest:
     needs: build-4os-shard
     runs-on: ubuntu-latest
     steps:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Emit Unified 5-OS GhostModuleRegistry Manifest
+      - name: Emit Unified 5-OS Holo v11 Registry Manifest
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release_tag || 'v0.2.0-holo-5os' }}
@@ -152,8 +152,8 @@ jobs:
                 });
               }
             }
-            const manifest = { schema: 'b8g-ghost-registry-5os-v1', compiler: 'holo-compiler (zig cc 0.14.0, zero cmake/ninja)', targets: ['win64', 'linux-x64', 'linux-arm64', 'macos-arm64', 'wasm32-wasi'], tag, total_libs: entries.length, libs: entries };
-            fs.writeFileSync('/tmp/ghost-5os-manifest.json', JSON.stringify(manifest, null, 2) + '\n');
-            console.log('[holo-5os] Published ghost-5os-manifest.json with', entries.length, 'cross-compiled 5-OS shared/WASI libraries');
+            const manifest = { schema: 'holo-v11-registry-5os', compiler: 'holo-compiler (zig cc 0.14.0, zero cmake/ninja)', targets: ['win64', 'linux-x64', 'linux-arm64', 'macos-arm64', 'wasm32-wasi'], tag, total_libs: entries.length, libs: entries };
+            fs.writeFileSync('/tmp/holo-v11-5os-manifest.json', JSON.stringify(manifest, null, 2) + '\n');
+            console.log('[holo-5os] Published holo-v11-5os-manifest.json with', entries.length, 'cross-compiled 5-OS shared/WASI libraries');
           "
-          gh release upload "$TAG" /tmp/ghost-5os-manifest.json --repo awesome-os/upstream-mirrors --clobber
+          gh release upload "$TAG" /tmp/holo-v11-5os-manifest.json --repo awesome-os/upstream-mirrors --clobber
