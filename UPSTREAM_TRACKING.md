@@ -1,3 +1,5 @@
+<!-- DOC-STATIC-CORPUS -->
+
 # Upstream Tracking, Sparse Mirroring & Semantic Rebuild Method (`UPSTREAM_TRACKING.md`)
 
 > **Purpose:** Plain-English guide and live status board showing how **Awesome-OS** and **Sectium Browser** track upstream C/C++ engines (`V8`, `Chromium`, `BoringSSL`, `Brotli`, `libwebp`, `zlib-ng`, `libpng`, `SQLite3`, `FreeType`, `HarfBuzz`, `libjpeg-turbo`, `Expat`) without maintaining bloated monolithic forks.
