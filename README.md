@@ -24,6 +24,17 @@ Updated automatically by [`.github/workflows/sync-sparse-mirrors.yml`](.github/w
 - **C++ / Native Allocator (4 native OS targets each):** `simdjson`, `simdutf`, `ada`, `mimalloc`
 - **Release & Manifest:** [`v11-max-5os-latest`](https://github.com/awesome-os/upstream-mirrors/releases/tag/v11-max-5os-latest) publishes all verified binaries, `SHA512SUMS.txt`, and `holo-v11-max-5os-manifest.json` (`schema: "holo-v11.max-5os-manifest.v1"`, `abiMagic: "0x33564742"`, `v11/files/<aa>/<sha512>` CAS layout).
 
+## Live Shard & Workflow Telemetry Summary
+
+<!-- AUTO-GENERATED:BEGIN source="holo-ci.json" id="upstream-mirrors:catalog-summary" -->
+| Gate / Surface | Verified Status | Details & Source |
+| :--- | :--- | :--- |
+| **Hardened Workflows (`holo-ci@v1`)** | `9` workflows · `0` findings | [`holo-ci.yml`](.github/workflows/holo-ci.yml), [`sync-sparse-mirrors.yml`](.github/workflows/sync-sparse-mirrors.yml), [`holo-4os-shards.yml`](.github/workflows/holo-4os-shards.yml), [`holo-5os-max-shards.yml`](.github/workflows/holo-5os-max-shards.yml), [`holo-5os-tier2-shards.yml`](.github/workflows/holo-5os-tier2-shards.yml), [`holo-5os-tier3-shards.yml`](.github/workflows/holo-5os-tier3-shards.yml), [`holo-5os-tier4-shards.yml`](.github/workflows/holo-5os-tier4-shards.yml), [`holo-5os-tier5-shards.yml`](.github/workflows/holo-5os-tier5-shards.yml), [`holo-5os-tier6-shards.yml`](.github/workflows/holo-5os-tier6-shards.yml) |
+| **Tier-1..6 5-OS Shards** | `win64`, `linux-x64`, `linux-arm64`, `macos-arm64`, `wasm32-wasi` | Pure `holo-compiler` (`zig cc` / `zig c++`) builds with fail-fast `linux-x64` smoke pre-flight (`B8G_ABI_MAGIC_V3 = 0x33564742`) |
+| **Sparse Orphan Mirrors** | `9` `mirror/*` branches | Debloated source-only snapshots (`boringssl`, `brotli`, `libwebp`, `zlib-ng`, `libpng`, `freetype`, `harfbuzz`, `libjpeg-turbo`, `expat`) indexed in [`mirror-index.json`](mirror-index.json) |
+| **`holo-ci.v1` Guards** | `7/7` active | `zeroGhost`, `zeroCasV1`, `spdxLicense`, `gitattributes`, `codeowners`, `noWorkflowBloat`, `requireWorkflowHardening` ([`holo-ci.json`](holo-ci.json)) |
+<!-- AUTO-GENERATED:END -->
+
 ## Quick Install & Run (Windows / Linux / macOS)
 
 ```sh
