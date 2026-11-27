@@ -32,7 +32,7 @@ jobs:
       release_tag: ${{ steps.resolve.outputs.release_tag }}
       versions_json: ${{ steps.resolve.outputs.versions_json }}
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -144,7 +144,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -788,7 +788,7 @@ jobs:
         with:
           path: /tmp/artifacts
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 

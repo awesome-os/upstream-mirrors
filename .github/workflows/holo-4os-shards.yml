@@ -126,7 +126,7 @@ jobs:
     needs: build-4os-shard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: Emit Unified 5-OS Holo v11 Registry Manifest
