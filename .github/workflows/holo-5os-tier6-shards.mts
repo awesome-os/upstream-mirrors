@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -5,7 +6,7 @@ import {
   appendGithubOutput,
   checkSkipMaterialized,
   cloneTag,
-  compileMultiOs,
+  type CompileTargetOptions,
   detFlagsForTarget,
   emitSha512AndReceipt,
   finalizeTierSumsPhase,
@@ -14,8 +15,13 @@ import {
   makeCmakeWrappers,
   resolveVersionsPhase,
   run,
+  runCapture,
   type ShardKind,
   verifyAndSmokeTest,
+  verifyBinaryMagic,
+  type VerifiedHeaderInfo,
+  zigCc,
+  zigCxx,
 } from "./holo-workflow-runtime.mts";
 
 export const TIER6_DEFAULTS: Record<string, LibraryPin> = {
@@ -79,10 +85,630 @@ function fetchTagTarball(repo: string, tag: string, dest = "src"): void {
   }
 }
 
+export interface Tier6CliOptions {
+  cmd?: string;
+  smokeOnly: boolean;
+  verifyTarget?: string;
+  libKey?: string;
+}
+
+export function parseTier6CliArgs(argv: readonly string[]): Tier6CliOptions {
+  const opts: Tier6CliOptions = { smokeOnly: false };
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--smoke-only") {
+      opts.smokeOnly = true;
+    } else if (arg === "--verify-target") {
+      opts.verifyTarget = argv[++i];
+    } else if (arg.startsWith("--verify-target=")) {
+      opts.verifyTarget = arg.slice("--verify-target=".length);
+    } else if (arg === "--lib") {
+      opts.libKey = argv[++i];
+    } else if (arg.startsWith("--lib=")) {
+      opts.libKey = arg.slice("--lib=".length);
+    } else if (!arg.startsWith("-") && !opts.cmd) {
+      opts.cmd = arg;
+    }
+  }
+  if (!opts.cmd && opts.smokeOnly) {
+    opts.cmd = "build";
+  }
+  return opts;
+}
+
+class SmokeFailureError extends Error {
+  readonly phase: string;
+  readonly command: string;
+  readonly exitCode: number;
+  readonly signal: string | null;
+  readonly stdout: string;
+  readonly stderr: string;
+
+  constructor(opts: {
+    phase: string;
+    command: string;
+    exitCode: number;
+    signal?: string | null;
+    stdout?: string;
+    stderr?: string;
+    message?: string;
+  }) {
+    super(opts.message ?? `Smoke phase '${opts.phase}' failed (exit=${opts.exitCode}): ${opts.command}`);
+    this.name = "SmokeFailureError";
+    this.phase = opts.phase;
+    this.command = opts.command;
+    this.exitCode = opts.exitCode;
+    this.signal = opts.signal ?? null;
+    this.stdout = opts.stdout ?? "";
+    this.stderr = opts.stderr ?? "";
+  }
+}
+
+function runProbeCommand(
+  phase: string,
+  cmd: string,
+  args: readonly string[],
+  opts?: { env?: NodeJS.ProcessEnv; cwd?: string }
+): { stdout: string; stderr: string } {
+  const res = spawnSync(cmd, [...args], {
+    cwd: opts?.cwd ?? process.cwd(),
+    env: opts?.env ?? process.env,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  const stdout = typeof res.stdout === "string" ? res.stdout : "";
+  const stderr = typeof res.stderr === "string" ? res.stderr : "";
+  if (stdout) process.stdout.write(stdout);
+  if (stderr) process.stderr.write(stderr);
+  if (res.error || res.status !== 0) {
+    const errMsg = res.error ? res.error.message : undefined;
+    throw new SmokeFailureError({
+      phase,
+      command: [cmd, ...args].join(" "),
+      exitCode: res.status ?? 1,
+      signal: res.signal ?? null,
+      stdout,
+      stderr: errMsg ? `${stderr}${stderr ? "\n" : ""}${errMsg}` : stderr,
+      message: errMsg ?? `Command exited with code ${res.status ?? 1}${res.signal ? ` (signal ${res.signal})` : ""}: ${cmd} ${args.join(" ")}`,
+    });
+  }
+  return { stdout, stderr };
+}
+
 function runCProbe(cCode: string, linkTargetPath: string, extraArgs: string[] = []): void {
   fs.writeFileSync("/tmp/tier6_smoke.c", cCode, "utf8");
-  run("zig", ["cc", "-target", "x86_64-linux-gnu", "-O2", "/tmp/tier6_smoke.c", ...extraArgs, "-ldl", "-lpthread", "-o", "/tmp/tier6_smoke"]);
-  run("/tmp/tier6_smoke", [linkTargetPath]);
+  runProbeCommand("compile-smoke-probe", "zig", [
+    "cc",
+    "-target",
+    "x86_64-linux-gnu",
+    "-O2",
+    "/tmp/tier6_smoke.c",
+    ...extraArgs,
+    "-ldl",
+    "-lpthread",
+    "-o",
+    "/tmp/tier6_smoke",
+  ]);
+  runProbeCommand("exec-smoke-probe", "/tmp/tier6_smoke", [linkTargetPath]);
+}
+
+function runDlopenProbe(soPath: string): void {
+  if (!fs.existsSync(soPath)) {
+    throw new SmokeFailureError({
+      phase: "dlopen-preflight",
+      command: `dlopen(${soPath})`,
+      exitCode: 1,
+      stderr: `Missing expected Linux x64 shared library: ${soPath}`,
+    });
+  }
+  fs.writeFileSync(
+    "/tmp/tier6_dlprobe.c",
+    `#include <dlfcn.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  if (argc < 2) return 2;
+  void *h = dlopen(argv[1], RTLD_NOW);
+  if (!h) {
+    fprintf(stderr, "dlopen(%s) failed: %s\\n", argv[1], dlerror());
+    return 1;
+  }
+  printf("dlopen(%s) OK\\n", argv[1]);
+  fflush(stdout);
+  dlclose(h);
+  return 0;
+}
+`,
+    "utf8"
+  );
+  const hasGcc = Boolean(runCapture("which", ["gcc"], { ignoreError: true }).trim());
+  if (hasGcc) {
+    runProbeCommand("compile-dlopen-probe", "gcc", ["-O2", "/tmp/tier6_dlprobe.c", "-ldl", "-lpthread", "-o", "/tmp/tier6_dlprobe"]);
+  } else {
+    runProbeCommand("compile-dlopen-probe", "zig", [
+      "cc",
+      "-target",
+      "x86_64-linux-gnu",
+      "-O2",
+      "/tmp/tier6_dlprobe.c",
+      "-ldl",
+      "-lpthread",
+      "-o",
+      "/tmp/tier6_dlprobe",
+    ]);
+  }
+  runProbeCommand("dlopen-probe", "/tmp/tier6_dlprobe", [soPath]);
+}
+
+function runDiagTool(cmd: string, args: readonly string[], maxLines?: number): string {
+  const res = spawnSync(cmd, [...args], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    timeout: 15_000,
+  });
+  if (res.error) {
+    return `(unavailable: ${cmd}: ${res.error.message})`;
+  }
+  const combined = [res.stdout, res.stderr].filter((s) => typeof s === "string" && s.trim().length > 0).join("\n").trim();
+  if (!combined) return `(empty, exit=${res.status ?? 0})`;
+  if (maxLines && maxLines > 0) {
+    const lines = combined.split(/\r?\n/);
+    if (lines.length > maxLines) {
+      return `${lines.slice(0, maxLines).join("\n")}\n... (truncated: showing ${maxLines} of ${lines.length} lines)`;
+    }
+  }
+  return combined;
+}
+
+function writeSmokeFailureReport(params: {
+  libKey: string;
+  libOut: string;
+  verifyTarget: string;
+  artifactPath: string;
+  err: unknown;
+}): string {
+  fs.mkdirSync("dist", { recursive: true });
+  const reportPath = "dist/smoke-failure-report.txt";
+  const errObj = params.err as Partial<SmokeFailureError> & { status?: number; signal?: string | null; stdout?: string | Buffer; stderr?: string | Buffer; message?: string };
+  const phase = errObj instanceof SmokeFailureError ? errObj.phase : "verify-and-smoke";
+  const command = errObj instanceof SmokeFailureError ? errObj.command : "(see error message)";
+  const exitCode = typeof errObj.exitCode === "number" ? errObj.exitCode : typeof errObj.status === "number" ? errObj.status : 1;
+  const signal = errObj.signal ?? null;
+  const stderr = typeof errObj.stderr === "string" ? errObj.stderr : Buffer.isBuffer(errObj.stderr) ? errObj.stderr.toString("utf8") : "";
+  const stdout = typeof errObj.stdout === "string" ? errObj.stdout : Buffer.isBuffer(errObj.stdout) ? errObj.stdout.toString("utf8") : "";
+  const message = errObj instanceof Error ? errObj.message : String(params.err);
+
+  const exists = fs.existsSync(params.artifactPath);
+  const size = exists ? fs.statSync(params.artifactPath).size : 0;
+  const magic = exists ? verifyBinaryMagic(params.artifactPath) : { name: path.basename(params.artifactPath), ok: false, format: "missing", arch: "unknown" };
+
+  const fileOut = exists ? runDiagTool("file", [params.artifactPath], 10) : "(artifact missing)";
+  const lddOut = exists ? runDiagTool("ldd", [params.artifactPath], 80) : "(artifact missing)";
+  const readelfOut = exists ? runDiagTool("readelf", ["-d", params.artifactPath], 80) : "(artifact missing)";
+  const nmUndefOut = exists ? runDiagTool("nm", ["-D", "-u", params.artifactPath], 60) : "(artifact missing)";
+  const nmDefOut = exists ? runDiagTool("nm", ["-D", "--defined-only", params.artifactPath], 80) : "(artifact missing)";
+
+  const report = [
+    "=== Holo Tier-6 Smoke Pre-Flight Failure Report ===",
+    `Timestamp: ${new Date().toISOString()}`,
+    `Library: ${params.libKey} (${params.libOut})`,
+    `Target: ${params.verifyTarget}`,
+    `Artifact: ${params.artifactPath} (exists=${exists}, bytes=${size})`,
+    `Phase: ${phase}`,
+    `Command: ${command}`,
+    `Exit Code: ${exitCode}`,
+    `Signal: ${signal ?? "none"}`,
+    "",
+    "--- Error Message ---",
+    message,
+    "",
+    "--- Captured Stderr ---",
+    stderr.trim() || "(empty)",
+    "",
+    "--- Captured Stdout ---",
+    stdout.trim() || "(empty)",
+    "",
+    "--- Header Magic Check ---",
+    JSON.stringify(magic, null, 2),
+    "",
+    "--- file ---",
+    fileOut,
+    "",
+    "--- ldd ---",
+    lddOut,
+    "",
+    "--- readelf -d ---",
+    readelfOut,
+    "",
+    "--- nm -D -u (undefined dynamic symbols, sample) ---",
+    nmUndefOut,
+    "",
+    "--- nm -D --defined-only (defined dynamic symbols, sample) ---",
+    nmDefOut,
+    "",
+  ].join("\n");
+
+  fs.writeFileSync(reportPath, report, "utf8");
+  console.error(`[smoke-preflight] Wrote structured failure diagnostics to ${reportPath}`);
+
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    const stderrSnippet = (stderr.trim() || message).split(/\r?\n/).slice(0, 40).join("\n");
+    const lddHighlights = lddOut
+      .split(/\r?\n/)
+      .filter((l) => /not found|error|=>/i.test(l))
+      .slice(0, 15)
+      .join("\n");
+    const summaryMd = [
+      `### Tier-6 Smoke Pre-Flight Failed: \`${params.libKey}\` (\`${params.verifyTarget}\`)`,
+      "",
+      `- **Artifact:** \`${params.artifactPath}\` (exists=\`${exists}\`, bytes=\`${size}\`, magic=\`${magic.ok ? `${magic.format}/${magic.arch}` : magic.format}\`)`,
+      `- **Phase:** \`${phase}\` | **Exit Code:** \`${exitCode}\`${signal ? ` | **Signal:** \`${signal}\`` : ""}`,
+      `- **Command:** \`${command}\``,
+      `- **Report:** \`${reportPath}\` (uploaded as \`tier6-smoke-failure-${params.libKey}\`)`,
+      "",
+      "**Stderr / Error:**",
+      "```text",
+      stderrSnippet,
+      "```",
+      ...(lddHighlights ? ["", "**ldd summary:**", "```text", lddHighlights, "```"] : []),
+      "",
+    ].join("\n");
+    fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, summaryMd, "utf8");
+  }
+  return reportPath;
+}
+
+const ABI_MAGIC_SYMBOL_MAP: Record<string, string> = {
+  nccl: "b8g_nccl_abi_magic",
+  rocm: "b8g_rocm_abi_magic",
+  triton: "b8g_triton_abi_magic",
+  "flash-attention": "b8g_flash_attention_abi_magic",
+  "xdna-driver": "b8g_xdna_abi_magic",
+};
+
+function createSmokeProbe(libKey: string, pin: LibraryPin, opts?: { icuMaj?: string }): (() => void) | undefined {
+  const { libOut, version } = pin;
+  const linuxSo = `dist/${libOut}-linux-x64.so`;
+
+  switch (libKey) {
+    case "protobuf":
+      return () => {
+        if (!fs.existsSync("/tmp/pb_src/src") || !fs.existsSync("/tmp/absl_src")) {
+          console.log("[smoke-only] /tmp/pb_src/src absent; dlopen(RTLD_NOW) verified dynamic linkage for libprotobuf.");
+          return;
+        }
+        fs.writeFileSync(
+          "/tmp/pb_smoke.cc",
+          `#include <cassert>
+#include <iostream>
+#include <string>
+#include "google/protobuf/arena.h"
+int main() {
+  google::protobuf::Arena arena;
+  auto* s = google::protobuf::Arena::Create<std::string>(&arena, "holo-protobuf-ok");
+  assert(s != nullptr && *s == "holo-protobuf-ok");
+  assert(arena.SpaceAllocated() > 0);
+  std::cout << "protobuf Arena smoke OK: " << *s << " (bytes=" << arena.SpaceAllocated() << ")\\n";
+  return 0;
+}
+`,
+          "utf8"
+        );
+        runProbeCommand("compile-protobuf-smoke", "zig", [
+          "c++", "-target", "x86_64-linux-gnu", "-O2", "-std=c++17",
+          "-I/tmp/pb_src/src", "-I/tmp/absl_src",
+          "/tmp/pb_smoke.cc", linuxSo, "-Wl,-rpath,$ORIGIN", "-lpthread",
+          "-o", "/tmp/pb_smoke",
+        ]);
+        runProbeCommand("exec-protobuf-smoke", "/tmp/pb_smoke", [], {
+          env: { ...process.env, LD_LIBRARY_PATH: path.resolve("dist") },
+        });
+      };
+
+    case "icu4c": {
+      const detectedMaj =
+        opts?.icuMaj ??
+        (fs.existsSync("src/icu4c/source/common/unicode/uvernum.h")
+          ? fs.readFileSync("src/icu4c/source/common/unicode/uvernum.h", "utf8").match(/#define\s+U_ICU_VERSION_MAJOR_NUM\s+(\d+)/)?.[1]
+          : undefined) ??
+        version.split(".")[0] ??
+        "79";
+      return () => {
+        runCProbe(
+          `#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+int main(int argc, char **argv) {
+  void *h = dlopen(argv[1], RTLD_NOW);
+  if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
+  typedef void (*fn_c2u)(const char *, uint16_t *, int32_t);
+  typedef void (*fn_u2c)(const uint16_t *, char *, int32_t);
+  fn_c2u c2u = (fn_c2u)dlsym(h, "u_charsToUChars_${detectedMaj}");
+  fn_u2c u2c = (fn_u2c)dlsym(h, "u_UCharsToChars_${detectedMaj}");
+  if (!c2u || !u2c) { fprintf(stderr, "missing u_charsToUChars_${detectedMaj}\\n"); return 2; }
+  uint16_t ubuf[32] = {0};
+  char out[32] = {0};
+  const char *in = "Holo-ICU-${detectedMaj}";
+  c2u(in, ubuf, (int32_t)strlen(in) + 1);
+  u2c(ubuf, out, (int32_t)strlen(in) + 1);
+  if (strcmp(in, out) != 0) { fprintf(stderr, "mismatch: %s\\n", out); return 3; }
+  printf("icu4c roundtrip OK: %s\\n", out);
+  dlclose(h);
+  return 0;
+}
+`,
+          linuxSo
+        );
+      };
+    }
+
+    case "vips":
+      return () => {
+        runCProbe(
+          `#include <dlfcn.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  void *h = dlopen(argv[1], RTLD_NOW);
+  if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
+  int (*vips_init_fn)(const char *) = (int (*)(const char *))dlsym(h, "vips_init");
+  int (*vips_ver_fn)(int) = (int (*)(int))dlsym(h, "vips_version");
+  void (*vips_shut_fn)(void) = (void (*)(void))dlsym(h, "vips_shutdown");
+  if (!vips_init_fn || !vips_ver_fn) { fprintf(stderr, "missing vips symbols\\n"); return 2; }
+  if (vips_init_fn("holo-probe") != 0) { fprintf(stderr, "vips_init failed\\n"); return 3; }
+  int maj = vips_ver_fn(0), min = vips_ver_fn(1), mic = vips_ver_fn(2);
+  printf("vips_version OK: %d.%d.%d\\n", maj, min, mic);
+  if (vips_shut_fn) vips_shut_fn();
+  dlclose(h);
+  return maj >= 8 ? 0 : 4;
+}
+`,
+          linuxSo
+        );
+      };
+
+    case "openblas":
+      return () => {
+        runCProbe(
+          `#include <dlfcn.h>
+#include <math.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  void *h = dlopen(argv[1], RTLD_NOW);
+  if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
+  typedef void (*fn_dgemm)(int, int, int, int, int, int, double, const double*, int, const double*, int, double, double*, int);
+  fn_dgemm dgemm = (fn_dgemm)dlsym(h, "cblas_dgemm");
+  if (!dgemm) { fprintf(stderr, "missing cblas_dgemm\\n"); return 2; }
+  double A[4] = {1, 2, 3, 4}, B[4] = {5, 6, 7, 8}, C[4] = {0, 0, 0, 0};
+  dgemm(101, 111, 111, 2, 2, 2, 1.0, A, 2, B, 2, 0.0, C, 2);
+  if (fabs(C[0]-19.0)>1e-9 || fabs(C[1]-22.0)>1e-9 || fabs(C[2]-43.0)>1e-9 || fabs(C[3]-50.0)>1e-9) {
+    fprintf(stderr, "bad dgemm: %f %f %f %f\\n", C[0], C[1], C[2], C[3]);
+    return 3;
+  }
+  printf("cblas_dgemm OK: [[%.0f, %.0f], [%.0f, %.0f]]\\n", C[0], C[1], C[2], C[3]);
+  dlclose(h);
+  return 0;
+}
+`,
+          linuxSo,
+          ["-lm"]
+        );
+      };
+
+    case "onednn":
+      return () => {
+        runCProbe(
+          `#include <dlfcn.h>
+#include <stdio.h>
+typedef struct { int major, minor, patch; const char *hash; unsigned cpu_runtime, gpu_runtime; } dnnl_ver_t;
+int main(int argc, char **argv) {
+  void *h = dlopen(argv[1], RTLD_NOW);
+  if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
+  const dnnl_ver_t* (*ver_fn)(void) = (const dnnl_ver_t* (*)(void))dlsym(h, "dnnl_version");
+  int (*eng_create)(void **, int, unsigned long) = (int (*)(void **, int, unsigned long))dlsym(h, "dnnl_engine_create");
+  int (*eng_destroy)(void *) = (int (*)(void *))dlsym(h, "dnnl_engine_destroy");
+  if (!ver_fn || !eng_create || !eng_destroy) { fprintf(stderr, "missing dnnl symbols\\n"); return 2; }
+  const dnnl_ver_t *v = ver_fn();
+  void *eng = NULL;
+  if (eng_create(&eng, 1, 0) != 0 || !eng) { fprintf(stderr, "dnnl_engine_create failed\\n"); return 3; }
+  printf("oneDNN engine OK: v%d.%d.%d (cpu_rt=%u)\\n", v->major, v->minor, v->patch, v->cpu_runtime);
+  eng_destroy(eng);
+  dlclose(h);
+  return 0;
+}
+`,
+          linuxSo
+        );
+      };
+
+    default: {
+      const magicSym = ABI_MAGIC_SYMBOL_MAP[libKey];
+      if (!magicSym) return undefined;
+      return () => {
+        runCProbe(
+          `#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+int main(int argc, char **argv) {
+  void *h = dlopen(argv[1], RTLD_NOW);
+  if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
+  uint32_t (*magic_fn)(void) = (uint32_t (*)(void))dlsym(h, "${magicSym}");
+  if (!magic_fn) { fprintf(stderr, "missing ${magicSym}\\n"); return 2; }
+  uint32_t m = magic_fn();
+  if (m != 0x33564742u) { fprintf(stderr, "bad ABI magic: 0x%08x\\n", m); return 3; }
+  printf("${libKey} ABI magic OK: 0x%08x\\n", m);
+  dlclose(h);
+  return 0;
+}
+`,
+          linuxSo
+        );
+      };
+    }
+  }
+}
+
+export function runHostSmokePreflight(opts: {
+  libKey: string;
+  pin: LibraryPin;
+  verifyTarget?: string;
+  smokeProbe?: () => void;
+}): VerifiedHeaderInfo[] {
+  const { libKey, pin } = opts;
+  const { libOut } = pin;
+  const target = opts.verifyTarget ?? "linux-x64";
+  const primaryLinuxArtifact = libKey === "cmake" ? `dist/${libOut}-linux-x64` : `dist/${libOut}-linux-x64.so`;
+  const artifactPattern = /\.(dll|so|dylib|wasm|dll\.a|exe|pyz)$|-(linux-x64|linux-arm64|macos-arm64)$/;
+
+  console.log(`=== Fail-Fast Host Smoke Pre-Flight: ${libKey} (${libOut}, target=${target}) ===`);
+  try {
+    if (!fs.existsSync("dist")) {
+      throw new SmokeFailureError({
+        phase: "preflight-dist-check",
+        command: "readdirSync(dist)",
+        exitCode: 1,
+        stderr: "dist/ directory does not exist",
+      });
+    }
+    const allFiles = fs.readdirSync("dist").filter((n) => artifactPattern.test(n)).sort();
+    const matched = opts.verifyTarget ? allFiles.filter((n) => n.includes(`-${opts.verifyTarget}`)) : allFiles;
+    if (matched.length === 0) {
+      throw new SmokeFailureError({
+        phase: "preflight-artifact-match",
+        command: `match dist/*-${target}*`,
+        exitCode: 1,
+        stderr: `No artifacts in dist/ matching target '${target}' (found: ${allFiles.join(", ") || "none"})`,
+      });
+    }
+
+    const verifiedHeaders: VerifiedHeaderInfo[] = [];
+    for (const name of matched) {
+      const full = path.join("dist", name);
+      const stat = fs.statSync(full);
+      if (stat.size <= 0) {
+        throw new SmokeFailureError({
+          phase: "preflight-header-check",
+          command: `stat(${full})`,
+          exitCode: 1,
+          stderr: `Empty artifact: ${full}`,
+        });
+      }
+      const hdr = verifyBinaryMagic(full);
+      verifiedHeaders.push(hdr);
+      if (!hdr.ok) {
+        throw new SmokeFailureError({
+          phase: "preflight-header-check",
+          command: `verifyBinaryMagic(${full})`,
+          exitCode: 1,
+          stderr: `Header verification failed for ${full}: ${hdr.detail ?? hdr.format}`,
+        });
+      }
+      console.log(`Pre-Flight Header OK: ${name} (${hdr.format}, ${hdr.arch}, ${stat.size} bytes)`);
+    }
+
+    if (!opts.verifyTarget || opts.verifyTarget === "linux-x64") {
+      if (libKey === "cmake") {
+        if (!fs.existsSync(primaryLinuxArtifact)) {
+          throw new SmokeFailureError({
+            phase: "preflight-cli-smoke",
+            command: `./${primaryLinuxArtifact} --version`,
+            exitCode: 1,
+            stderr: `Missing CLI binary: ${primaryLinuxArtifact}`,
+          });
+        }
+        fs.chmodSync(primaryLinuxArtifact, 0o755);
+        runProbeCommand("preflight-cli-smoke", `./${primaryLinuxArtifact}`, ["--version"]);
+      } else {
+        runDlopenProbe(primaryLinuxArtifact);
+      }
+      if (opts.smokeProbe) {
+        opts.smokeProbe();
+      }
+    }
+
+    console.log(`=== Fail-Fast Host Smoke Pre-Flight PASSED: ${libKey} (${target}) ===`);
+    return verifiedHeaders;
+  } catch (err) {
+    const targetArtifact =
+      opts.verifyTarget && opts.verifyTarget !== "linux-x64"
+        ? path.join(
+            "dist",
+            (fs.existsSync("dist") ? fs.readdirSync("dist").find((n) => n.includes(`-${opts.verifyTarget}`)) : undefined) ??
+              `${libOut}-${opts.verifyTarget}`
+          )
+        : primaryLinuxArtifact;
+    writeSmokeFailureReport({ libKey, libOut, verifyTarget: target, artifactPath: targetArtifact, err });
+    throw err;
+  }
+}
+
+function compileMultiOsFailFast(libOut: string, opts: CompileTargetOptions, onLinuxX64Ready: () => void): void {
+  const fn = opts.cxx ? zigCxx : zigCc;
+  const common = opts.commonArgs ?? [];
+  const winArgs = opts.winArgs ?? [];
+  const linuxArgs = opts.linuxArgs ?? [];
+  const macArgs = opts.macArgs ?? [];
+  const wasiArgs = opts.wasiArgs ?? [];
+  const evex = opts.evex512 ? ["-mevex512"] : [];
+  const winExport = opts.winExportAll ? ["-Wl,--export-all-symbols"] : [];
+
+  fn("x86_64-linux-gnu", [
+    "-O2",
+    ...evex,
+    "-shared",
+    "-fPIC",
+    "-s",
+    ...common,
+    ...linuxArgs,
+    "-o",
+    `dist/${libOut}-linux-x64.so`,
+  ]);
+
+  onLinuxX64Ready();
+
+  fn("aarch64-linux-gnu", [
+    "-O2",
+    "-shared",
+    "-fPIC",
+    "-s",
+    ...common,
+    ...linuxArgs,
+    "-o",
+    `dist/${libOut}-linux-arm64.so`,
+  ]);
+
+  fn("x86_64-windows-gnu", [
+    "-O2",
+    ...evex,
+    "-shared",
+    "-s",
+    ...winExport,
+    ...common,
+    ...winArgs,
+    "-o",
+    `dist/${libOut}-win64.dll`,
+    `-Wl,--out-implib,dist/${libOut}-win64.dll.a`,
+  ]);
+
+  fn("aarch64-macos", [
+    "-O2",
+    "-shared",
+    "-fPIC",
+    ...common,
+    ...macArgs,
+    "-o",
+    `dist/${libOut}-macos-arm64.dylib`,
+  ]);
+
+  if (opts.includeWasi) {
+    fn("wasm32-wasi", [
+      "-O2",
+      "-mexec-model=reactor",
+      ...common,
+      ...wasiArgs,
+      "-o",
+      `dist/${libOut}-wasm32-wasi.wasm`,
+    ]);
+  }
 }
 
 function parseSemverTuple(ver: string): [number, number, number] {
@@ -91,14 +717,30 @@ function parseSemverTuple(ver: string): [number, number, number] {
   return [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)];
 }
 
-export function buildTier6Library(libKey: string, pin: LibraryPin): void {
+export function buildTier6Library(
+  libKey: string,
+  pin: LibraryPin,
+  opts?: { smokeOnly?: boolean; verifyTarget?: string }
+): void {
   const { libOut, repo, tag, version } = pin;
   const kind = TIER6_KIND_MAP[libKey] ?? "runtime-library";
+
+  if (opts?.smokeOnly) {
+    const smokeProbe = createSmokeProbe(libKey, pin);
+    runHostSmokePreflight({ libKey, pin, verifyTarget: opts.verifyTarget, smokeProbe });
+    return;
+  }
+
   console.log(`=== Building Tier-6 ${libKey} (${libOut}, kind=${kind}) @ ${repo} ${tag} (${version}) ===`);
   fs.mkdirSync("src", { recursive: true });
   fs.mkdirSync("dist", { recursive: true });
+  fs.rmSync("dist/smoke-failure-report.txt", { force: true });
   const nproc = cpuCount();
-  let smokeProbe: (() => void) | undefined;
+  const preflightTarget = opts?.verifyTarget ?? "linux-x64";
+  let smokeProbe: (() => void) | undefined = createSmokeProbe(libKey, pin);
+  const runLinuxX64Preflight = (): void => {
+    runHostSmokePreflight({ libKey, pin, verifyTarget: preflightTarget, smokeProbe });
+  };
 
   switch (libKey) {
     case "protobuf": {
@@ -168,6 +810,7 @@ endif()
         ]);
       };
       linkPbShared(buildPb("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu"), "x86_64-linux-gnu", `dist/${libOut}-linux-x64.so`, ["-lpthread", "-lm"]);
+      runLinuxX64Preflight();
       linkPbShared(buildPb("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu"), "aarch64-linux-gnu", `dist/${libOut}-linux-arm64.so`, ["-lpthread", "-lm"]);
       linkPbShared(
         buildPb("win64", "Windows", "AMD64", "x86_64-windows-gnu"),
@@ -175,32 +818,6 @@ endif()
         `dist/${libOut}-win64.dll`,
         ["-Wl,--export-all-symbols", `-Wl,--out-implib,dist/${libOut}-win64.dll.a`, "-ldbghelp", "-ladvapi32"]
       );
-      smokeProbe = () => {
-        fs.writeFileSync(
-          "/tmp/pb_smoke.cc",
-          `#include <cassert>
-#include <iostream>
-#include <string>
-#include "google/protobuf/arena.h"
-int main() {
-  google::protobuf::Arena arena;
-  auto* s = google::protobuf::Arena::Create<std::string>(&arena, "holo-protobuf-ok");
-  assert(s != nullptr && *s == "holo-protobuf-ok");
-  assert(arena.SpaceAllocated() > 0);
-  std::cout << "protobuf Arena smoke OK: " << *s << " (bytes=" << arena.SpaceAllocated() << ")\\n";
-  return 0;
-}
-`,
-          "utf8"
-        );
-        run("zig", [
-          "c++", "-target", "x86_64-linux-gnu", "-O2", "-std=c++17",
-          "-I/tmp/pb_src/src", "-I/tmp/absl_src",
-          "/tmp/pb_smoke.cc", `dist/${libOut}-linux-x64.so`, "-Wl,-rpath,$ORIGIN", "-lpthread",
-          "-o", "/tmp/pb_smoke",
-        ]);
-        run("/tmp/pb_smoke", [], { env: { ...process.env, LD_LIBRARY_PATH: path.resolve("dist") } });
-      };
       break;
     }
 
@@ -215,53 +832,30 @@ int main() {
       const uverText = fs.readFileSync("src/icu4c/source/common/unicode/uvernum.h", "utf8");
       const majMatch = uverText.match(/#define\s+U_ICU_VERSION_MAJOR_NUM\s+(\d+)/);
       const icuMaj = majMatch?.[1] ?? version.split(".")[0] ?? "79";
+      smokeProbe = createSmokeProbe(libKey, pin, { icuMaj });
       fs.mkdirSync("/tmp/icu_mac_inc", { recursive: true });
       fs.writeFileSync("/tmp/icu_mac_inc/tzfile.h", '#define TZDIR "/var/db/timezone/zoneinfo"\n#define TZDEFAULT "/etc/localtime"\n', "utf8");
-      compileMultiOs(libOut, {
-        cxx: true,
-        winExportAll: true,
-        commonArgs: [
-          "-std=c++17",
-          "-DU_COMMON_IMPLEMENTATION",
-          "-DU_ENABLE_DYLOAD=0",
-          "-DU_HAVE_ELF_H=0",
-          "-DU_ATTRIBUTE_DEPRECATED=",
-          "-Isrc/icu4c/source/common",
-          "-Isrc/icu4c/source/i18n",
-          ...srcs,
-        ],
-        winArgs: ["-ladvapi32"],
-        linuxArgs: ["-lpthread", "-lm"],
-        macArgs: ["-I/tmp/icu_mac_inc", "-lpthread", "-lm"],
-      });
-      smokeProbe = () => {
-        runCProbe(
-          `#include <dlfcn.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <string.h>
-int main(int argc, char **argv) {
-  void *h = dlopen(argv[1], RTLD_NOW);
-  if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
-  typedef void (*fn_c2u)(const char *, uint16_t *, int32_t);
-  typedef void (*fn_u2c)(const uint16_t *, char *, int32_t);
-  fn_c2u c2u = (fn_c2u)dlsym(h, "u_charsToUChars_${icuMaj}");
-  fn_u2c u2c = (fn_u2c)dlsym(h, "u_UCharsToChars_${icuMaj}");
-  if (!c2u || !u2c) { fprintf(stderr, "missing u_charsToUChars_${icuMaj}\\n"); return 2; }
-  uint16_t ubuf[32] = {0};
-  char out[32] = {0};
-  const char *in = "Holo-ICU-${icuMaj}";
-  c2u(in, ubuf, (int32_t)strlen(in) + 1);
-  u2c(ubuf, out, (int32_t)strlen(in) + 1);
-  if (strcmp(in, out) != 0) { fprintf(stderr, "mismatch: %s\\n", out); return 3; }
-  printf("icu4c roundtrip OK: %s\\n", out);
-  dlclose(h);
-  return 0;
-}
-`,
-          `dist/${libOut}-linux-x64.so`
-        );
-      };
+      compileMultiOsFailFast(
+        libOut,
+        {
+          cxx: true,
+          winExportAll: true,
+          commonArgs: [
+            "-std=c++17",
+            "-DU_COMMON_IMPLEMENTATION",
+            "-DU_ENABLE_DYLOAD=0",
+            "-DU_HAVE_ELF_H=0",
+            "-DU_ATTRIBUTE_DEPRECATED=",
+            "-Isrc/icu4c/source/common",
+            "-Isrc/icu4c/source/i18n",
+            ...srcs,
+          ],
+          winArgs: ["-ladvapi32"],
+          linuxArgs: ["-lpthread", "-lm"],
+          macArgs: ["-I/tmp/icu_mac_inc", "-lpthread", "-lm"],
+        },
+        runLinuxX64Preflight
+      );
       break;
     }
 
@@ -303,28 +897,7 @@ int main(int argc, char **argv) {
       );
       run("meson", ["compile", "-C", bdir, `-j${nproc}`, "libvips/vips:shared_library"]);
       copyIfFound(findFirstMatch(`${bdir}/libvips`, (n) => n.startsWith("libvips.so") && !n.endsWith(".p"), 2), `dist/${libOut}-linux-x64.so`);
-      smokeProbe = () => {
-        runCProbe(
-          `#include <dlfcn.h>
-#include <stdio.h>
-int main(int argc, char **argv) {
-  void *h = dlopen(argv[1], RTLD_NOW);
-  if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
-  int (*vips_init_fn)(const char *) = (int (*)(const char *))dlsym(h, "vips_init");
-  int (*vips_ver_fn)(int) = (int (*)(int))dlsym(h, "vips_version");
-  void (*vips_shut_fn)(void) = (void (*)(void))dlsym(h, "vips_shutdown");
-  if (!vips_init_fn || !vips_ver_fn) { fprintf(stderr, "missing vips symbols\\n"); return 2; }
-  if (vips_init_fn("holo-probe") != 0) { fprintf(stderr, "vips_init failed\\n"); return 3; }
-  int maj = vips_ver_fn(0), min = vips_ver_fn(1), mic = vips_ver_fn(2);
-  printf("vips_version OK: %d.%d.%d\\n", maj, min, mic);
-  if (vips_shut_fn) vips_shut_fn();
-  dlclose(h);
-  return maj >= 8 ? 0 : 4;
-}
-`,
-          `dist/${libOut}-linux-x64.so`
-        );
-      };
+      runLinuxX64Preflight();
       break;
     }
 
@@ -351,37 +924,12 @@ int main(int argc, char **argv) {
         return b;
       };
       copyIfFound(findFirstMatch(buildBlas("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "CORE2", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-x64.so`);
+      runLinuxX64Preflight();
       copyIfFound(findFirstMatch(buildBlas("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "ARMV8", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-arm64.so`);
       const bWin = buildBlas("win64", "Windows", "AMD64", "x86_64-windows-gnu", "CORE2", "-Wl,--export-all-symbols -s");
       copyIfFound(findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll"), 3), `dist/${libOut}-win64.dll`);
       const imp = findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll.a"), 3);
       if (imp) fs.copyFileSync(imp, `dist/${libOut}-win64.dll.a`);
-      smokeProbe = () => {
-        runCProbe(
-          `#include <dlfcn.h>
-#include <math.h>
-#include <stdio.h>
-int main(int argc, char **argv) {
-  void *h = dlopen(argv[1], RTLD_NOW);
-  if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
-  typedef void (*fn_dgemm)(int, int, int, int, int, int, double, const double*, int, const double*, int, double, double*, int);
-  fn_dgemm dgemm = (fn_dgemm)dlsym(h, "cblas_dgemm");
-  if (!dgemm) { fprintf(stderr, "missing cblas_dgemm\\n"); return 2; }
-  double A[4] = {1, 2, 3, 4}, B[4] = {5, 6, 7, 8}, C[4] = {0, 0, 0, 0};
-  dgemm(101, 111, 111, 2, 2, 2, 1.0, A, 2, B, 2, 0.0, C, 2);
-  if (fabs(C[0]-19.0)>1e-9 || fabs(C[1]-22.0)>1e-9 || fabs(C[2]-43.0)>1e-9 || fabs(C[3]-50.0)>1e-9) {
-    fprintf(stderr, "bad dgemm: %f %f %f %f\\n", C[0], C[1], C[2], C[3]);
-    return 3;
-  }
-  printf("cblas_dgemm OK: [[%.0f, %.0f], [%.0f, %.0f]]\\n", C[0], C[1], C[2], C[3]);
-  dlclose(h);
-  return 0;
-}
-`,
-          `dist/${libOut}-linux-x64.so`,
-          ["-lm"]
-        );
-      };
       break;
     }
 
@@ -439,35 +987,12 @@ exec zig c++ -target ${zigT} ${det} "\${args[@]}"
         return b;
       };
       copyIfFound(findFirstMatch(buildDnn("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -lm -Wl,-z,nodelete -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-x64.so`);
+      runLinuxX64Preflight();
       copyIfFound(findFirstMatch(buildDnn("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -lm -Wl,-z,nodelete -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-arm64.so`);
       const bWin = buildDnn("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-s");
       copyIfFound(findFirstMatch(bWin, (n) => n.includes("dnnl") && n.endsWith(".dll"), 3), `dist/${libOut}-win64.dll`);
       const imp = findFirstMatch(bWin, (n) => n.includes("dnnl") && n.endsWith(".dll.a"), 3);
       if (imp) fs.copyFileSync(imp, `dist/${libOut}-win64.dll.a`);
-      smokeProbe = () => {
-        runCProbe(
-          `#include <dlfcn.h>
-#include <stdio.h>
-typedef struct { int major, minor, patch; const char *hash; unsigned cpu_runtime, gpu_runtime; } dnnl_ver_t;
-int main(int argc, char **argv) {
-  void *h = dlopen(argv[1], RTLD_NOW);
-  if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
-  const dnnl_ver_t* (*ver_fn)(void) = (const dnnl_ver_t* (*)(void))dlsym(h, "dnnl_version");
-  int (*eng_create)(void **, int, unsigned long) = (int (*)(void **, int, unsigned long))dlsym(h, "dnnl_engine_create");
-  int (*eng_destroy)(void *) = (int (*)(void *))dlsym(h, "dnnl_engine_destroy");
-  if (!ver_fn || !eng_create || !eng_destroy) { fprintf(stderr, "missing dnnl symbols\\n"); return 2; }
-  const dnnl_ver_t *v = ver_fn();
-  void *eng = NULL;
-  if (eng_create(&eng, 1, 0) != 0 || !eng) { fprintf(stderr, "dnnl_engine_create failed\\n"); return 3; }
-  printf("oneDNN engine OK: v%d.%d.%d (cpu_rt=%u)\\n", v->major, v->minor, v->patch, v->cpu_runtime);
-  eng_destroy(eng);
-  dlclose(h);
-  return 0;
-}
-`,
-          `dist/${libOut}-linux-x64.so`
-        );
-      };
       break;
     }
 
@@ -510,6 +1035,7 @@ exec zig ${tool} -target ${zigT} ${det} "\${args[@]}"
         return `${b}/bin`;
       };
       copyIfFound(findFirstMatch(buildCmake("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-s"), (n) => n === "cmake", 1), `dist/${libOut}-linux-x64`);
+      runLinuxX64Preflight();
       copyIfFound(
         findFirstMatch(
           buildCmake("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-s", [
@@ -565,7 +1091,7 @@ ncclResult_t ncclGetVersion(int *version) { if (!version) return ncclInvalidArgu
 `,
         "utf8"
       );
-      compileMultiOs(libOut, { includeWasi: true, commonArgs: ["-std=c11", "-I/tmp/nccl_inc", "/tmp/nccl_probe.c"] });
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "-I/tmp/nccl_inc", "/tmp/nccl_probe.c"] }, runLinuxX64Preflight);
       break;
     }
 
@@ -589,7 +1115,7 @@ B8G_EXP const char* b8g_rocm_tag(void) { return "${tag}"; }
 `,
         "utf8"
       );
-      compileMultiOs(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/rocm_probe.c"] });
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/rocm_probe.c"] }, runLinuxX64Preflight);
       break;
     }
 
@@ -612,7 +1138,7 @@ B8G_EXP const char* b8g_triton_tag(void) { return "${tag}"; }
 `,
         "utf8"
       );
-      compileMultiOs(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/triton_probe.c"] });
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/triton_probe.c"] }, runLinuxX64Preflight);
       break;
     }
 
@@ -637,7 +1163,7 @@ B8G_EXP const char* b8g_flash_attention_version_str(void) { return "${parsedVer}
 `,
         "utf8"
       );
-      compileMultiOs(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/flash_probe.c"] });
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/flash_probe.c"] }, runLinuxX64Preflight);
       break;
     }
 
@@ -689,7 +1215,7 @@ B8G_EXP uint32_t b8g_xdna_ioctl_exec_cmd(void) { return DRM_AMDXDNA_EXEC_CMD; }
 `,
         "utf8"
       );
-      compileMultiOs(libOut, { includeWasi: true, commonArgs: ["-std=c11", "-I/tmp/xdna_inc", "-Isrc/src/include/uapi", "/tmp/xdna_probe.c"] });
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "-I/tmp/xdna_inc", "-Isrc/src/include/uapi", "/tmp/xdna_probe.c"] }, runLinuxX64Preflight);
       break;
     }
 
@@ -698,13 +1224,21 @@ B8G_EXP uint32_t b8g_xdna_ioctl_exec_cmd(void) { return DRM_AMDXDNA_EXEC_CMD; }
   }
 
   void detFlagsForTarget;
-  const verifiedHeaders = verifyAndSmokeTest({ libKey, libOut, cliBinaries: ["cmake"], smokeProbe });
+  let verifiedHeaders: VerifiedHeaderInfo[];
+  try {
+    verifiedHeaders = verifyAndSmokeTest({ libKey, libOut, cliBinaries: ["cmake"] });
+  } catch (err) {
+    const primaryArtifact = libKey === "cmake" ? `dist/${libOut}-linux-x64` : `dist/${libOut}-linux-x64.so`;
+    writeSmokeFailureReport({ libKey, libOut, verifyTarget: "all", artifactPath: primaryArtifact, err });
+    throw err;
+  }
   emitSha512AndReceipt({ libKey, libOut, repo, tag, version, kind, verifiedHeaders });
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
 if (isMain) {
-  const cmd = process.argv[2];
+  const cli = parseTier6CliArgs(process.argv.slice(2));
+  const cmd = cli.cmd;
   if (cmd === "resolve") {
     await resolveVersionsPhase({
       tier: "tier6",
@@ -714,16 +1248,20 @@ if (isMain) {
       defaults: TIER6_DEFAULTS,
     });
   } else if (cmd === "build") {
-    const libKey = process.env.LIB_KEY || "";
+    const libKey = cli.libKey || process.env.LIB_KEY || "";
     const versions = JSON.parse(process.env.VERSIONS_JSON || "{}") as Record<string, LibraryPin>;
     const pin = versions[libKey] ?? TIER6_DEFAULTS[libKey];
     if (!pin) throw new Error(`Missing version pin for ${libKey}`);
+    if (cli.smokeOnly) {
+      buildTier6Library(libKey, pin, { smokeOnly: true, verifyTarget: cli.verifyTarget });
+      process.exit(0);
+    }
     appendGithubOutput({ lib_out: pin.libOut });
     if (checkSkipMaterialized(libKey, pin.libOut, pin.version, process.env.RELEASE_TAG || "v11-max-5os-latest")) {
       process.exit(0);
     }
     appendGithubOutput({ skipped: "false" });
-    buildTier6Library(libKey, pin);
+    buildTier6Library(libKey, pin, { verifyTarget: cli.verifyTarget });
   } else if (cmd === "finalize") {
     finalizeTierSumsPhase({
       tierTitle: "Holo 5-OS Tier-6 Shards",

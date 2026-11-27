@@ -83,6 +83,10 @@ jobs:
           RELEASE_TAG: ${{ needs.ensure-release.outputs.release_tag }}
           FORCE_REBUILD: ${{ inputs.force_rebuild == true && 'true' || 'false' }}
         run: node .github/workflows/holo-5os-tier6-shards.mts build
+      - name: Upload smoke-failure report & linux-x64 binaries
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with: { name: "tier6-smoke-failure-${{ matrix.lib }}", path: "dist/smoke-failure-report.txt\ndist/*-linux-x64.*\ndist/*-linux-x64", retention-days: 1, if-no-files-found: ignore }
       - uses: actions/upload-artifact@v7
         if: ${{ steps.build.outputs.skipped != 'true' }}
         with: { name: "tier6-sums-${{ matrix.lib }}", path: "dist/SHA512SUMS-${{ matrix.lib }}.txt", retention-days: 7 }
