@@ -808,8 +808,8 @@ jobs:
                 )
               }
               build_ssl_arch "mingw64" "x86_64-windows-gnu"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS -Wl,--export-all-symbols -Wl,--whole-archive /tmp/ssl_mingw64/libcrypto.a -Wl,--no-whole-archive -lws2_32 -lcrypt32 -o "dist/libcrypto-win64.dll" "-Wl,--out-implib,dist/libcrypto-win64.dll.a"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS -Wl,--export-all-symbols -Wl,--whole-archive /tmp/ssl_mingw64/libssl.a -Wl,--no-whole-archive "dist/libcrypto-win64.dll.a" -lws2_32 -lcrypt32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS -Wl,--export-all-symbols -Wl,--whole-archive /tmp/ssl_mingw64/libcrypto.a -Wl,--no-whole-archive -lws2_32 -lcrypt32 -lbcrypt -o "dist/libcrypto-win64.dll" "-Wl,--out-implib,dist/libcrypto-win64.dll.a"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS -Wl,--export-all-symbols -Wl,--whole-archive /tmp/ssl_mingw64/libssl.a -Wl,--no-whole-archive "dist/libcrypto-win64.dll.a" -lws2_32 -lcrypt32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
 
               build_ssl_arch "linux-x86_64" "x86_64-linux-gnu"
               zig cc -target x86_64-linux-gnu -O2 -shared -fPIC -s $DET_LINUX_FLAGS -Wl,-soname,libcrypto-linux-x64.so -Wl,--whole-archive /tmp/ssl_linux-x86_64/libcrypto.a -Wl,--no-whole-archive -ldl -lpthread -o "dist/libcrypto-linux-x64.so"
