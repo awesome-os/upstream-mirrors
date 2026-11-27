@@ -103,7 +103,9 @@ export function buildTier6Library(libKey: string, pin: LibraryPin): void {
   switch (libKey) {
     case "protobuf": {
       cloneTag(repo, tag, "/tmp/pb_src");
-      cloneTag("abseil/abseil-cpp", "", "/tmp/absl_src");
+      const depsTxt = fs.readFileSync("/tmp/pb_src/cmake/dependencies.cmake", "utf8");
+      const abslVer = depsTxt.match(/set\(abseil-cpp-version\s+"([^"]+)"\)/)?.[1] ?? "20250512.1";
+      cloneTag("abseil/abseil-cpp", abslVer, "/tmp/absl_src");
       fs.mkdirSync("/tmp/pb_bundle", { recursive: true });
       fs.writeFileSync(
         "/tmp/pb_bundle/CMakeLists.txt",
@@ -115,7 +117,7 @@ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 set(ABSL_PROPAGATE_CXX_STD ON)
 set(ABSL_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
-set(BUILD_SHARED_LIBS OFF)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(/tmp/absl_src abseil_build)
 set(protobuf_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(protobuf_BUILD_CONFORMANCE OFF CACHE BOOL "" FORCE)
@@ -126,12 +128,12 @@ set(protobuf_BUILD_LIBUPB OFF CACHE BOOL "" FORCE)
 set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
 set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
 set(protobuf_ABSL_PROVIDER package CACHE STRING "" FORCE)
-set(protobuf_BUILD_SHARED_LIBS ON CACHE BOOL "" FORCE)
+set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(/tmp/pb_src pb_build)
 `,
         "utf8"
       );
-      const buildPb = (arch: string, sys: string, proc: string, zigT: string, shLd: string, extra: string[] = []): string => {
+      const buildPb = (arch: string, sys: string, proc: string, zigT: string): string => {
         const w = `/tmp/pb_w_${arch}`;
         const b = `/tmp/pb_b_${arch}`;
         makeCmakeWrappers(w, zigT);
@@ -140,21 +142,33 @@ add_subdirectory(/tmp/pb_src pb_build)
           `-DCMAKE_SYSTEM_NAME=${sys}`, `-DCMAKE_SYSTEM_PROCESSOR=${proc}`,
           `-DCMAKE_C_COMPILER=${w}/cc`, `-DCMAKE_CXX_COMPILER=${w}/cxx`,
           `-DCMAKE_AR=${w}/ar`, `-DCMAKE_RANLIB=${w}/ranlib`,
-          `-DCMAKE_SHARED_LINKER_FLAGS=${shLd}`,
-          "-DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON",
-          ...extra,
         ];
         if (sys === "Windows") args.push(`-DCMAKE_RC_COMPILER=${w}/windres`);
         run("cmake", args);
         run("cmake", ["--build", b, "--target", "libprotobuf", `-j${nproc}`]);
-        return `${b}/pb_build`;
+        return b;
       };
-      copyIfFound(findFirstMatch(buildPb("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -s"), (n) => n.startsWith("libprotobuf.so"), 2), `dist/${libOut}-linux-x64.so`);
-      copyIfFound(findFirstMatch(buildPb("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -s"), (n) => n.startsWith("libprotobuf.so"), 2), `dist/${libOut}-linux-arm64.so`);
-      const bWin = buildPb("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-s -ldbghelp");
-      copyIfFound(findFirstMatch(bWin, (n) => n.includes("protobuf") && n.endsWith(".dll"), 2), `dist/${libOut}-win64.dll`);
-      const imp = findFirstMatch(bWin, (n) => n.includes("protobuf") && n.endsWith(".dll.a"), 2);
-      if (imp) fs.copyFileSync(imp, `dist/${libOut}-win64.dll.a`);
+      const linkPbShared = (buildRoot: string, zigT: string, outPath: string, extraLink: string[]): void => {
+        const pbLib = findFirstMatch(`${buildRoot}/pb_build`, (n) => n === "libprotobuf.a", 2);
+        if (!pbLib) throw new Error(`Missing libprotobuf.a in ${buildRoot}`);
+        const utf8Libs = findFiles(`${buildRoot}/pb_build/third_party`, (_p, n) => n.endsWith(".a"), 3);
+        const abslLibs = findFiles(`${buildRoot}/abseil_build`, (_p, n) => n.endsWith(".a"), 4);
+        const det = detFlagsForTarget(zigT);
+        run("zig", [
+          "c++", "-target", zigT, ...det, "-O2", "-shared", "-s",
+          "-Wl,--whole-archive", pbLib, "-Wl,--no-whole-archive",
+          "-Wl,--start-group", ...utf8Libs, ...abslLibs, "-Wl,--end-group",
+          ...extraLink, "-o", outPath,
+        ]);
+      };
+      linkPbShared(buildPb("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu"), "x86_64-linux-gnu", `dist/${libOut}-linux-x64.so`, ["-lpthread", "-lm"]);
+      linkPbShared(buildPb("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu"), "aarch64-linux-gnu", `dist/${libOut}-linux-arm64.so`, ["-lpthread", "-lm"]);
+      linkPbShared(
+        buildPb("win64", "Windows", "AMD64", "x86_64-windows-gnu"),
+        "x86_64-windows-gnu",
+        `dist/${libOut}-win64.dll`,
+        ["-Wl,--export-all-symbols", `-Wl,--out-implib,dist/${libOut}-win64.dll.a`, "-ldbghelp", "-ladvapi32"]
+      );
       smokeProbe = () => {
         fs.writeFileSync(
           "/tmp/pb_smoke.cc",
@@ -195,6 +209,8 @@ int main() {
       const uverText = fs.readFileSync("src/icu4c/source/common/unicode/uvernum.h", "utf8");
       const majMatch = uverText.match(/#define\s+U_ICU_VERSION_MAJOR_NUM\s+(\d+)/);
       const icuMaj = majMatch?.[1] ?? version.split(".")[0] ?? "79";
+      fs.mkdirSync("/tmp/icu_mac_inc", { recursive: true });
+      fs.writeFileSync("/tmp/icu_mac_inc/tzfile.h", '#define TZDIR "/var/db/timezone/zoneinfo"\n#define TZDEFAULT "/etc/localtime"\n', "utf8");
       compileMultiOs(libOut, {
         cxx: true,
         winExportAll: true,
@@ -210,7 +226,7 @@ int main() {
         ],
         winArgs: ["-ladvapi32"],
         linuxArgs: ["-lpthread", "-lm"],
-        macArgs: ["-lpthread", "-lm"],
+        macArgs: ["-I/tmp/icu_mac_inc", "-lpthread", "-lm"],
       });
       smokeProbe = () => {
         runCProbe(
@@ -259,7 +275,6 @@ int main(int argc, char **argv) {
           "-Ddefault_library=shared",
           "-Ddeprecated=false",
           "-Dexamples=false",
-          "-Dtests=false",
           "-Dmodules=disabled",
           "-Dintrospection=disabled",
           "-Dcplusplus=false",
@@ -296,7 +311,7 @@ int main(int argc, char **argv) {
 
     case "openblas": {
       fetchTagTarball(repo, tag);
-      const buildBlas = (arch: string, sys: string, proc: string, zigT: string, shLd: string, extra: string[] = []): string => {
+      const buildBlas = (arch: string, sys: string, proc: string, zigT: string, blasTarget: string, shLd: string, extra: string[] = []): string => {
         const w = `/tmp/blas_w_${arch}`;
         const b = `/tmp/blas_b_${arch}`;
         makeCmakeWrappers(w, zigT);
@@ -307,7 +322,7 @@ int main(int argc, char **argv) {
           `-DCMAKE_SHARED_LINKER_FLAGS=${shLd}`,
           "-DBUILD_SHARED_LIBS=ON", "-DBUILD_STATIC_LIBS=OFF",
           "-DBUILD_WITHOUT_LAPACK=ON", "-DBUILD_TESTING=OFF",
-          "-DNOFORTRAN=1", "-DUSE_THREAD=0", "-DTARGET=GENERIC",
+          "-DNOFORTRAN=1", "-DUSE_THREAD=0", `-DTARGET=${blasTarget}`,
           "-DHOSTCC=gcc", "-DC_LAPACK=ON",
           ...extra,
         ];
@@ -316,9 +331,9 @@ int main(int argc, char **argv) {
         run("cmake", ["--build", b, `-j${nproc}`]);
         return b;
       };
-      copyIfFound(findFirstMatch(buildBlas("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-x64.so`);
-      copyIfFound(findFirstMatch(buildBlas("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-arm64.so`);
-      const bWin = buildBlas("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-Wl,--export-all-symbols -s");
+      copyIfFound(findFirstMatch(buildBlas("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "SSE_GENERIC", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-x64.so`);
+      copyIfFound(findFirstMatch(buildBlas("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "ARMV8", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-arm64.so`);
+      const bWin = buildBlas("win64", "Windows", "AMD64", "x86_64-windows-gnu", "SSE_GENERIC", "-Wl,--export-all-symbols -s");
       copyIfFound(findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll"), 3), `dist/${libOut}-win64.dll`);
       const imp = findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll.a"), 3);
       if (imp) fs.copyFileSync(imp, `dist/${libOut}-win64.dll.a`);
@@ -415,12 +430,29 @@ int main(int argc, char **argv) {
         const w = `/tmp/cm_w_${arch}`;
         const b = `/tmp/cm_b_${arch}`;
         makeCmakeWrappers(w, zigT);
+        const det = detFlagsForTarget(zigT).join(" ");
+        for (const [fn, tool] of [["cc", "cc"], ["cxx", "c++"]] as const) {
+          fs.writeFileSync(
+            `${w}/${fn}`,
+            `#!/usr/bin/env bash
+args=()
+for a in "$@"; do
+  case "$a" in -I/usr/include|-isystem/usr/include) continue ;; esac
+  args+=("$a")
+done
+exec zig ${tool} -target ${zigT} ${det} "\${args[@]}"
+`,
+            "utf8"
+          );
+          fs.chmodSync(`${w}/${fn}`, 0o755);
+        }
         const args = [
           "-S", "src", "-B", b, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
           `-DCMAKE_SYSTEM_NAME=${sys}`, `-DCMAKE_SYSTEM_PROCESSOR=${proc}`,
           `-DCMAKE_C_COMPILER=${w}/cc`, `-DCMAKE_CXX_COMPILER=${w}/cxx`,
           `-DCMAKE_AR=${w}/ar`, `-DCMAKE_RANLIB=${w}/ranlib`,
           `-DCMAKE_EXE_LINKER_FLAGS=${ldFlags}`,
+          "-DCMAKE_DISABLE_FIND_PACKAGE_Iconv=TRUE",
           "-DBUILD_CursesDialog=OFF", "-DBUILD_QtDialog=OFF", "-DBUILD_TESTING=OFF",
           "-DCMake_BUILD_LTO=OFF", "-DCMAKE_USE_OPENSSL=OFF", "-DCMake_ENABLE_DEBUGGER=OFF",
           ...extra,
@@ -466,7 +498,7 @@ int main(int argc, char **argv) {
         .replaceAll("${nccl:Suffix}", suffix)
         .replaceAll("${nccl:Version}", String(verCode));
       fs.writeFileSync("/tmp/nccl_inc/nccl.h", tpl, "utf8");
-      fs.writeFileSync("/tmp/nccl_inc/cuda_runtime.h", "#ifndef _CUDA_RUNTIME_STUB\n#define _CUDA_RUNTIME_STUB\n#define CUDART_VERSION 12000\ntypedef void* cudaStream_t;\n#endif\n", "utf8");
+      fs.writeFileSync("/tmp/nccl_inc/cuda_runtime.h", "#ifndef _CUDA_RUNTIME_STUB\n#define _CUDA_RUNTIME_STUB\n#define CUDART_VERSION 12000\ntypedef void* cudaStream_t;\ntypedef void* cudaEvent_t;\n#endif\n", "utf8");
       fs.writeFileSync("/tmp/nccl_inc/cuda_fp16.h", "", "utf8");
       fs.writeFileSync("/tmp/nccl_inc/cuda_bf16.h", "", "utf8");
       fs.writeFileSync(
@@ -574,6 +606,7 @@ B8G_EXP const char* b8g_flash_attention_version_str(void) { return "${parsedVer}
         `#ifndef _DRM_STUB_H
 #define _DRM_STUB_H
 #include <stdint.h>
+typedef int8_t __s8;
 typedef uint8_t __u8;
 typedef uint16_t __u16;
 typedef uint32_t __u32;
