@@ -131,8 +131,11 @@ set(protobuf_ABSL_PROVIDER package CACHE STRING "" FORCE)
 set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 set(CMAKE_CXX_VISIBILITY_PRESET default CACHE STRING "" FORCE)
 set(CMAKE_VISIBILITY_INLINES_HIDDEN OFF CACHE BOOL "" FORCE)
-add_compile_definitions(LIBPROTOBUF_EXPORTS)
+add_compile_definitions(PROTOBUF_USE_DLLS LIBPROTOBUF_EXPORTS)
 add_subdirectory(/tmp/pb_src pb_build)
+if(TARGET libprotobuf)
+  set_target_properties(libprotobuf PROPERTIES CXX_VISIBILITY_PRESET default VISIBILITY_INLINES_HIDDEN OFF)
+endif()
 `,
         "utf8"
       );
@@ -268,6 +271,19 @@ int main(int argc, char **argv) {
       run("sudo", ["apt-get", "install", "-y", "-qq", "meson", "ninja-build", "pkg-config", "libglib2.0-dev", "libexpat1-dev"]);
       const w = "/tmp/vips_wrap";
       makeCmakeWrappers(w, "x86_64-linux-gnu");
+      fs.mkdirSync("/tmp/vips_expat_inc", { recursive: true });
+      for (const h of ["expat.h", "expat_external.h"]) {
+        if (fs.existsSync(`/usr/include/${h}`)) fs.copyFileSync(`/usr/include/${h}`, `/tmp/vips_expat_inc/${h}`);
+      }
+      const detVips = detFlagsForTarget("x86_64-linux-gnu").join(" ");
+      for (const [fn, tool] of [["cc", "cc"], ["cxx", "c++"]] as const) {
+        fs.writeFileSync(
+          `${w}/${fn}`,
+          `#!/usr/bin/env bash\nexec zig ${tool} -target x86_64-linux-gnu ${detVips} -I/tmp/vips_expat_inc -L/usr/lib/x86_64-linux-gnu "$@"\n`,
+          "utf8"
+        );
+        fs.chmodSync(`${w}/${fn}`, 0o755);
+      }
       const bdir = "/tmp/vips_build";
       fs.rmSync(bdir, { recursive: true, force: true });
       run(
@@ -384,6 +400,9 @@ int main(int argc, char **argv) {
           "-DDNNL_LIBRARY_TYPE=SHARED",
           "-DDNNL_CPU_RUNTIME=SEQ",
           "-DDNNL_GPU_RUNTIME=NONE",
+          "-DDNNL_ENABLE_WORKLOAD=INFERENCE",
+          "-DDNNL_AARCH64_USE_KAI=OFF",
+          ...(proc === "x86_64" || proc === "AMD64" ? ["-DDNNL_ENABLE_PRIMITIVE_CPU_ISA=AVX2"] : []),
           "-DDNNL_BUILD_TESTS=OFF",
           "-DDNNL_BUILD_EXAMPLES=OFF",
           "-DDNNL_ENABLE_JIT_PROFILING=OFF",
