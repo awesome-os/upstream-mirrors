@@ -612,5 +612,14 @@
       "url": "https://github.com/awesome-os/upstream-mirrors/releases/download/v0.3.0-holo-5os/SHA256SUMS-sqlite3-5os.txt",
       "dependencies": []
     }
-  ]
+  ],
+  "lockfileVersion": 3,
+  "migrationsApplied": [
+    "v0->v1",
+    "v1->v2",
+    "v2->v3"
+  ],
+  "provenanceChain": {
+    "commitAndTreeBound": true
+  }
 }
