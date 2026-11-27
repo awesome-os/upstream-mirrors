@@ -102,7 +102,7 @@ jobs:
             })().catch(e => { console.error(e); process.exit(1); });
           '
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: resolved-tier2-versions
           path: resolved-tier2-versions.json
@@ -760,7 +760,7 @@ jobs:
           '
           ls -lh dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ steps.build.outputs.skipped != 'true' }}
         with:
           name: tier2-sums-${{ matrix.lib }}
