@@ -424,6 +424,7 @@ exec zig c++ -target ${zigT} ${det} "\${args[@]}"
           "-DDNNL_LIBRARY_TYPE=SHARED",
           "-DDNNL_CPU_RUNTIME=SEQ",
           "-DDNNL_GPU_RUNTIME=NONE",
+          "-DDNNL_BUILD_GRAPH=OFF",
           "-DDNNL_ENABLE_WORKLOAD=INFERENCE",
           "-DDNNL_AARCH64_USE_KAI=OFF",
           ...(proc === "x86_64" || proc === "AMD64" ? ["-DDNNL_ENABLE_PRIMITIVE_CPU_ISA=AVX2"] : []),
@@ -437,8 +438,8 @@ exec zig c++ -target ${zigT} ${det} "\${args[@]}"
         run("cmake", ["--build", b, "--target", "dnnl", `-j${nproc}`]);
         return b;
       };
-      copyIfFound(findFirstMatch(buildDnn("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -lm -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-x64.so`);
-      copyIfFound(findFirstMatch(buildDnn("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -lm -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-arm64.so`);
+      copyIfFound(findFirstMatch(buildDnn("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -lm -Wl,-z,nodelete -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-x64.so`);
+      copyIfFound(findFirstMatch(buildDnn("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -lm -Wl,-z,nodelete -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-arm64.so`);
       const bWin = buildDnn("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-s");
       copyIfFound(findFirstMatch(bWin, (n) => n.includes("dnnl") && n.endsWith(".dll"), 3), `dist/${libOut}-win64.dll`);
       const imp = findFirstMatch(bWin, (n) => n.includes("dnnl") && n.endsWith(".dll.a"), 3);
