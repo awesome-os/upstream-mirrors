@@ -391,6 +391,30 @@ int main(int argc, char **argv) {
         const w = `/tmp/dnn_w_${arch}`;
         const b = `/tmp/dnn_b_${arch}`;
         makeCmakeWrappers(w, zigT);
+        if (sys === "Windows") {
+          const det = detFlagsForTarget(zigT).join(" ");
+          fs.writeFileSync(
+            `${w}/cxx`,
+            `#!/usr/bin/env bash
+args=()
+skip_next=0
+for a in "$@"; do
+  if [ "$skip_next" -eq 1 ]; then
+    skip_next=0
+    case "$a" in /NXCOMPAT|/LTCG|/INCREMENTAL:*|/OPT:*|/DYNAMICBASE) continue ;; esac
+    args+=("-Xlinker" "$a")
+    continue
+  fi
+  if [ "$a" = "-Xlinker" ]; then skip_next=1; continue; fi
+  case "$a" in /NXCOMPAT|/LTCG|/INCREMENTAL:*) continue ;; esac
+  args+=("$a")
+done
+exec zig c++ -target ${zigT} ${det} "\${args[@]}"
+`,
+            "utf8"
+          );
+          fs.chmodSync(`${w}/cxx`, 0o755);
+        }
         const args = [
           "-S", "src", "-B", b, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
           `-DCMAKE_SYSTEM_NAME=${sys}`, `-DCMAKE_SYSTEM_PROCESSOR=${proc}`,
