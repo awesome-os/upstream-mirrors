@@ -818,10 +818,6 @@ jobs:
               build_ssl_arch "linux-aarch64" "aarch64-linux-gnu"
               zig cc -target aarch64-linux-gnu -O2 -shared -fPIC -s $DET_LINUX_FLAGS -Wl,-soname,libcrypto-linux-arm64.so -Wl,--whole-archive /tmp/ssl_linux-aarch64/libcrypto.a -Wl,--no-whole-archive -ldl -lpthread -o "dist/libcrypto-linux-arm64.so"
               zig cc -target aarch64-linux-gnu -O2 -shared -fPIC -s $DET_LINUX_FLAGS -Wl,-soname,libssl-linux-arm64.so "-Wl,-rpath,\$ORIGIN" -Wl,--whole-archive /tmp/ssl_linux-aarch64/libssl.a -Wl,--no-whole-archive "dist/libcrypto-linux-arm64.so" -ldl -lpthread -o "dist/${LIB_OUT}-linux-arm64.so"
-
-              build_ssl_arch "darwin64-arm64-cc" "aarch64-macos"
-              zig cc -target aarch64-macos -O2 -shared -fPIC $DET_FLAGS -Wl,-all_load /tmp/ssl_darwin64-arm64-cc/libcrypto.a -Wl,-noall_load -o "dist/libcrypto-macos-arm64.dylib"
-              zig cc -target aarch64-macos -O2 -shared -fPIC $DET_FLAGS -Wl,-all_load /tmp/ssl_darwin64-arm64-cc/libssl.a -Wl,-noall_load "dist/libcrypto-macos-arm64.dylib" -o "dist/${LIB_OUT}-macos-arm64.dylib"
               DL_LD_LIBRARY_PATH="$PWD/dist"
               ;;
 
