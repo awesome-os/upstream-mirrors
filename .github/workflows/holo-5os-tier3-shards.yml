@@ -348,7 +348,7 @@ jobs:
               '
               JPG_CORE="src/src/jcapimin.c src/src/jchuff.c src/src/jcicc.c src/src/jcinit.c src/src/jclhuff.c src/src/jcmarker.c src/src/jcmaster.c src/src/jcomapi.c src/src/jcparam.c src/src/jcphuff.c src/src/jctrans.c src/src/jdapimin.c src/src/jdatadst.c src/src/jdatasrc.c src/src/jdhuff.c src/src/jdicc.c src/src/jdinput.c src/src/jdlhuff.c src/src/jdmarker.c src/src/jdmaster.c src/src/jdphuff.c src/src/jdtrans.c src/src/jerror.c src/src/jfdctflt.c src/src/jmemmgr.c src/src/jmemnobs.c src/src/jpeg_nbits.c src/src/jaricom.c src/src/jcarith.c src/src/jdarith.c"
               JPG_WRAP=$(find src/src/wrapper -maxdepth 1 -name '*.c' ! -name 'template.c' ! -name 'rdpng*' ! -name 'wrpng*' ! -name 'rdppm*' ! -name 'wrppm*' | sort)
-              JPG_FLAGS="-I/tmp/jpg_inc -Isrc/src -DWITH_SIMD=0"
+              JPG_FLAGS="-I/tmp/jpg_inc -Isrc/src"
               zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $DET_FLAGS $JPG_FLAGS $JPG_CORE $JPG_WRAP -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $JPG_FLAGS $JPG_CORE $JPG_WRAP -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $JPG_FLAGS $JPG_CORE $JPG_WRAP -o "dist/${LIB_OUT}-linux-arm64.so"
@@ -465,8 +465,8 @@ jobs:
               XML2_TMP_SRCS=$(for f in $XML2_REL_SRCS; do echo "/tmp/libxml2_src/$f"; done)
               XML2_TMP_FLAGS="-I/tmp/xml_inc -I/tmp/libxml2_src/include -I/tmp/libxml2_src -DHAVE_CONFIG_H"
               zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $XML2_TMP_FLAGS -DIN_LIBXML $XML2_TMP_SRCS -lbcrypt -lws2_32 -o "/tmp/xml2_dist/libxml2-win64.dll" "-Wl,--out-implib,/tmp/xml2_dist/libxml2-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $XML2_TMP_FLAGS $XML2_TMP_SRCS -lm -o "/tmp/xml2_dist/libxml2-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $XML2_TMP_FLAGS $XML2_TMP_SRCS -lm -o "/tmp/xml2_dist/libxml2-linux-arm64.so"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $XML2_TMP_FLAGS -Wl,-soname,libxml2-linux-x64.so $XML2_TMP_SRCS -lm -o "/tmp/xml2_dist/libxml2-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $XML2_TMP_FLAGS -Wl,-soname,libxml2-linux-arm64.so $XML2_TMP_SRCS -lm -o "/tmp/xml2_dist/libxml2-linux-arm64.so"
 
               node -e '
                 const fs = require("node:fs");
@@ -516,8 +516,8 @@ jobs:
               XSLT_SRCS="src/libxslt/attributes.c src/libxslt/attrvt.c src/libxslt/documents.c src/libxslt/extensions.c src/libxslt/extra.c src/libxslt/functions.c src/libxslt/imports.c src/libxslt/keys.c src/libxslt/namespaces.c src/libxslt/numbers.c src/libxslt/pattern.c src/libxslt/preproc.c src/libxslt/security.c src/libxslt/templates.c src/libxslt/transform.c src/libxslt/variables.c src/libxslt/xslt.c src/libxslt/xsltlocale.c src/libxslt/xsltutils.c"
               XSLT_FLAGS="-I/tmp/xslt_inc -Isrc -I/tmp/xml_inc -I/tmp/libxml2_src/include -DHAVE_CONFIG_H"
               zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $XSLT_FLAGS -DIN_LIBXSLT $XSLT_SRCS /tmp/xml2_dist/libxml2-win64.dll.a -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $XSLT_FLAGS $XSLT_SRCS -L/tmp/xml2_dist -l:libxml2-linux-x64.so "-Wl,-rpath,\$ORIGIN" -lm -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $XSLT_FLAGS $XSLT_SRCS -L/tmp/xml2_dist -l:libxml2-linux-arm64.so "-Wl,-rpath,\$ORIGIN" -lm -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $XSLT_FLAGS $XSLT_SRCS /tmp/xml2_dist/libxml2-linux-x64.so "-Wl,-rpath,\$ORIGIN" -lm -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $XSLT_FLAGS $XSLT_SRCS /tmp/xml2_dist/libxml2-linux-arm64.so "-Wl,-rpath,\$ORIGIN" -lm -o "dist/${LIB_OUT}-linux-arm64.so"
               zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $XSLT_FLAGS $XSLT_SRCS -lm -Wl,-undefined,dynamic_lookup -o "dist/${LIB_OUT}-macos-arm64.dylib"
               zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS $XSLT_FLAGS -I/tmp/libxml2_src "-Ddup(x)=(x)" $XSLT_SRCS $XML2_TMP_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               DL_LD_LIBRARY_PATH="/tmp/xml2_dist"
