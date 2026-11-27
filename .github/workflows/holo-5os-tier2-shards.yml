@@ -775,7 +775,7 @@ jobs:
 
       - name: Attest SLSA Build Provenance for ${{ matrix.lib }} Shard & Receipt
         if: ${{ steps.build.outputs.skipped != 'true' }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'dist/*'
 
@@ -852,6 +852,6 @@ jobs:
 
       - name: Attest SLSA Build Provenance for Tier-1B & Tier-2 Checksums
         if: ${{ hashFiles('/tmp/SHA512SUMS-tier2.txt') != '' }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: '/tmp/SHA512SUMS-tier2.txt'
