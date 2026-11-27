@@ -15,14 +15,19 @@ jobs:
   ensure-release:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/workflows/
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
+
       - env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release_tag || 'v0.2.0-holo-5os' }}
-        run: |
-          gh release view "$TAG" --repo awesome-os/upstream-mirrors >/dev/null 2>&1 || \
-            gh release create "$TAG" --repo awesome-os/upstream-mirrors \
-              --title "Holo 5-OS Shards (${TAG}) — Zero-CMake / Zero-Ninja Cross-Compiled + WASI" \
-              --notes "100% pure \`zig cc\` cross-compiled shared + WASI libraries (Win64 \`.dll\`, Linux x64/ARM64 \`.so\`, Darwin ARM64 \`.dylib\`, \`wasm32-wasi .wasm\`) directly from sparse \`mirror/*\` branches — zero CMake, zero Ninja, zero Make, zero apt-get."
+        run: node .github/workflows/holo-4os-shards.mts ensure-release
 
   build-4os-shard:
     needs: ensure-release
@@ -32,9 +37,18 @@ jobs:
       matrix:
         engine: [brotli, expat, sqlite3, libwebp, lz4, md4c, picohttp]
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/workflows/
+
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.14.0
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '26'
 
       - name: Checkout Sparse Mirror Branch (if mirror-backed)
         if: matrix.engine != 'sqlite3'
@@ -46,75 +60,7 @@ jobs:
       - name: Compile ${{ matrix.engine }} for 5 OS Targets (Zero CMake / Zero Ninja + WASI)
         env:
           ENGINE: ${{ matrix.engine }}
-        run: |
-          mkdir -p dist
-          compile_5os() {
-            LIB="$1"
-            shift
-            echo "=== Compiling ${LIB} for 5 OS targets (Win64, Linux x64/ARM64, macOS ARM64, wasm32-wasi) via pure zig cc ==="
-            zig cc -target x86_64-windows-gnu -O2 -shared -s "$@" -o "dist/${LIB}-win64.dll" "-Wl,--out-implib,dist/${LIB}-win64.dll.a"
-            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${LIB}-linux-x64.so"
-            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${LIB}-linux-arm64.so"
-            zig cc -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${LIB}-macos-arm64.dylib"
-            zig cc -target wasm32-wasi        -O2 -mexec-model=reactor "$@" -o "dist/${LIB}-wasm32-wasi.wasm"
-          }
-
-          if [ "$ENGINE" = "brotli" ]; then
-            SRCS=$(find src/c/common src/c/dec src/c/enc -name '*.c' | sort)
-            compile_5os libbrotli -Isrc/c/include -Isrc/c -DBROTLI_SHARED_COMPILATION -DBROTLI_BUILD_COMMON_LIBRARY -DBROTLI_BUILD_DECODER_LIBRARY -DBROTLI_BUILD_ENCODER_LIBRARY $SRCS -lm
-          elif [ "$ENGINE" = "expat" ]; then
-            mkdir -p /tmp/expat_inc
-            printf '%s\n' \
-              '#ifndef EXPAT_CONFIG_H' \
-              '#define EXPAT_CONFIG_H' \
-              '#define BYTEORDER 1234' \
-              '#define HAVE_MEMMOVE 1' \
-              '#define HAVE_STDINT_H 1' \
-              '#define HAVE_STDLIB_H 1' \
-              '#define HAVE_STRING_H 1' \
-              '#define XML_NS 1' \
-              '#define XML_DTD 1' \
-              '#define XML_GE 1' \
-              '#define XML_CONTEXT_BYTES 1024' \
-              '#if defined(_WIN32)' \
-              '#define HAVE_RAND_S 1' \
-              '#elif defined(__APPLE__)' \
-              '#define HAVE_ARC4RANDOM_BUF 1' \
-              '#elif defined(__wasi__)' \
-              '#define HAVE_GETENTROPY 1' \
-              '#else' \
-              '#define HAVE_GETRANDOM 1' \
-              '#endif' \
-              '#endif' > /tmp/expat_inc/expat_config.h
-            EXPAT_BASE="-I/tmp/expat_inc -Isrc/expat/lib -DHAVE_EXPAT_CONFIG_H -DXML_ENABLE_VISIBILITY=1 src/expat/lib/xmlparse.c src/expat/lib/xmlrole.c src/expat/lib/xmltok.c src/expat/lib/xcs.c"
-            zig cc -target x86_64-windows-gnu -O2 -shared -s $EXPAT_BASE src/expat/lib/random_rand_s.c -o dist/libexpat-win64.dll -Wl,--out-implib,dist/libexpat-win64.dll.a
-            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $EXPAT_BASE src/expat/lib/random_getrandom.c -o dist/libexpat-linux-x64.so
-            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $EXPAT_BASE src/expat/lib/random_getrandom.c -o dist/libexpat-linux-arm64.so
-            zig cc -target aarch64-macos      -O2 -shared -fPIC $EXPAT_BASE src/expat/lib/random_arc4random_buf.c -o dist/libexpat-macos-arm64.dylib
-            zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $EXPAT_BASE src/expat/lib/random_getentropy.c -o dist/libexpat-wasm32-wasi.wasm
-          elif [ "$ENGINE" = "sqlite3" ]; then
-            mkdir -p /tmp/sq
-            curl -fsSL https://www.sqlite.org/2025/sqlite-amalgamation-3490100.zip -o /tmp/sq/sq.zip
-            unzip -q /tmp/sq/sq.zip -d /tmp/sq
-            SQ_C=$(find /tmp/sq -maxdepth 2 -name sqlite3.c | head -n 1)
-            zig cc -target x86_64-windows-gnu -O2 -shared -s -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=1 "$SQ_C" -o dist/libsqlite3-win64.dll -Wl,--out-implib,dist/libsqlite3-win64.dll.a
-            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=1 "$SQ_C" -o dist/libsqlite3-linux-x64.so
-            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=1 "$SQ_C" -o dist/libsqlite3-linux-arm64.so
-            zig cc -target aarch64-macos      -O2 -shared -fPIC -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=1 "$SQ_C" -o dist/libsqlite3-macos-arm64.dylib
-            zig cc -target wasm32-wasi        -O2 -mexec-model=reactor -DSQLITE_ENABLE_FTS5 -DSQLITE_ENABLE_JSON1 -DSQLITE_THREADSAFE=0 -DSQLITE_OMIT_LOAD_EXTENSION=1 -D_WASI_EMULATED_MMAN -lwasi-emulated-mman "$SQ_C" -o dist/libsqlite3-wasm32-wasi.wasm
-          elif [ "$ENGINE" = "libwebp" ]; then
-            SRCS=$(find src/src/dec src/src/dsp src/src/enc src/src/utils src/src/demux src/sharpyuv -name '*.c' | sort)
-            compile_5os libwebp -Isrc -Isrc/src -DWEBP_DLL $SRCS -lm
-          elif [ "$ENGINE" = "lz4" ]; then
-            compile_5os liblz4 -Isrc/lib src/lib/lz4.c src/lib/lz4hc.c src/lib/lz4frame.c src/lib/xxhash.c
-          elif [ "$ENGINE" = "md4c" ]; then
-            compile_5os libmd4c -Isrc/src src/src/md4c.c src/src/md4c-html.c src/src/entity.c
-          elif [ "$ENGINE" = "picohttp" ]; then
-            compile_5os libpicohttp -Isrc src/picohttpparser.c
-          fi
-
-          (cd dist && sha256sum * > "SHA256SUMS-${ENGINE}-5os.txt")
-          ls -lh dist/
+        run: node .github/workflows/holo-4os-shards.mts build
 
       - name: Upload 5-OS Shard Binaries to GitHub Release
         env:
@@ -126,34 +72,17 @@ jobs:
     needs: build-4os-shard
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            .github/workflows/
+
       - uses: actions/setup-node@v7
         with:
-          node-version: '22'
+          node-version: '26'
+
       - name: Emit Unified 5-OS Holo v11 Registry Manifest
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release_tag || 'v0.2.0-holo-5os' }}
-        run: |
-          mkdir -p /tmp/sums
-          gh release download "$TAG" --repo awesome-os/upstream-mirrors --pattern "SHA256SUMS-*-5os.txt" --dir /tmp/sums --clobber
-          node -e "
-            const fs = require('fs');
-            const path = require('path');
-            const tag = process.env.TAG;
-            const entries = [];
-            for (const f of fs.readdirSync('/tmp/sums').sort()) {
-              for (const line of fs.readFileSync(path.join('/tmp/sums', f), 'utf8').trim().split('\n')) {
-                const [sha256, filename] = line.trim().split(/\s+/);
-                if (!sha256 || !filename || filename.endsWith('.dll.a')) continue;
-                entries.push({
-                  filename,
-                  sha256,
-                  download_url: 'https://github.com/awesome-os/upstream-mirrors/releases/download/' + tag + '/' + filename
-                });
-              }
-            }
-            const manifest = { schema: 'holo-v11-registry-5os', compiler: 'holo-compiler (zig cc 0.14.0, zero cmake/ninja)', targets: ['win64', 'linux-x64', 'linux-arm64', 'macos-arm64', 'wasm32-wasi'], tag, total_libs: entries.length, libs: entries };
-            fs.writeFileSync('/tmp/holo-v11-5os-manifest.json', JSON.stringify(manifest, null, 2) + '\n');
-            console.log('[holo-5os] Published holo-v11-5os-manifest.json with', entries.length, 'cross-compiled 5-OS shared/WASI libraries');
-          "
-          gh release upload "$TAG" /tmp/holo-v11-5os-manifest.json --repo awesome-os/upstream-mirrors --clobber
+        run: node .github/workflows/holo-4os-shards.mts manifest

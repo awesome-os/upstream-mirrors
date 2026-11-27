@@ -9,6 +9,7 @@ import {
   EXPECTED_TIER5_LIBS,
   dryCompileC11FiveTargets,
   resolveZigBinary,
+  validateAllWorkflowPairs,
   validateShardReceipt,
   validateTier2Workflow,
   validateTier3Workflow,
@@ -17,12 +18,26 @@ import {
 } from "./test-5os-recipe.mts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
-const WORKFLOW_PATH = path.join(REPO_ROOT, ".github", "workflows", "holo-5os-tier2-shards.yml");
-const TIER3_WORKFLOW_PATH = path.join(REPO_ROOT, ".github", "workflows", "holo-5os-tier3-shards.yml");
-const TIER4_WORKFLOW_PATH = path.join(REPO_ROOT, ".github", "workflows", "holo-5os-tier4-shards.yml");
-const TIER5_WORKFLOW_PATH = path.join(REPO_ROOT, ".github", "workflows", "holo-5os-tier5-shards.yml");
+const WORKFLOWS_DIR = path.join(REPO_ROOT, ".github", "workflows");
+const WORKFLOW_PATH = path.join(WORKFLOWS_DIR, "holo-5os-tier2-shards.yml");
+const TIER3_WORKFLOW_PATH = path.join(WORKFLOWS_DIR, "holo-5os-tier3-shards.yml");
+const TIER4_WORKFLOW_PATH = path.join(WORKFLOWS_DIR, "holo-5os-tier4-shards.yml");
+const TIER5_WORKFLOW_PATH = path.join(WORKFLOWS_DIR, "holo-5os-tier5-shards.yml");
 
-test("holo-5os-tier2-shards.yml passes matrix, cache, skip-fastpath, deterministic flags, and all 6 shard repairs", () => {
+test("all non-reusable workflows are paired *.yml + *.mts targeting Node 26+", () => {
+  const checked = validateAllWorkflowPairs(WORKFLOWS_DIR);
+  assert.deepEqual(checked, [
+    "holo-4os-shards",
+    "holo-5os-max-shards",
+    "holo-5os-tier2-shards",
+    "holo-5os-tier3-shards",
+    "holo-5os-tier4-shards",
+    "holo-5os-tier5-shards",
+    "sync-sparse-mirrors",
+  ]);
+});
+
+test("holo-5os-tier2-shards passes matrix, cache, skip-fastpath, deterministic flags, companion .mts, and all 6 shard repairs", () => {
   const result = validateTier2Workflow(WORKFLOW_PATH);
   assert.deepEqual(result.matrixLibs, [...EXPECTED_TIER2_LIBS]);
   assert.equal(result.hasForceRebuildInput, true);
@@ -31,10 +46,11 @@ test("holo-5os-tier2-shards.yml passes matrix, cache, skip-fastpath, determinist
   assert.equal(result.hasDeterministicFlags, true);
   assert.equal(result.hasReceiptEmission, true);
   assert.equal(result.hasPerShardSlsa, true);
+  assert.equal(result.hasCompanionMts, true);
   assert.equal(result.repairedShards.length, 6);
 });
 
-test("holo-5os-tier3-shards.yml passes 8-lib matrix, cache, skip-fastpath, deterministic flags, WebAssembly.validate, and SLSA", () => {
+test("holo-5os-tier3-shards passes 8-lib matrix, cache, skip-fastpath, deterministic flags, companion .mts, WebAssembly.validate, and SLSA", () => {
   const result = validateTier3Workflow(TIER3_WORKFLOW_PATH);
   assert.deepEqual(result.matrixLibs, [...EXPECTED_TIER3_LIBS]);
   assert.equal(result.hasForceRebuildInput, true);
@@ -43,10 +59,11 @@ test("holo-5os-tier3-shards.yml passes 8-lib matrix, cache, skip-fastpath, deter
   assert.equal(result.hasDeterministicFlags, true);
   assert.equal(result.hasReceiptEmission, true);
   assert.equal(result.hasPerShardSlsa, true);
+  assert.equal(result.hasCompanionMts, true);
   assert.equal(result.repairedShards.length, 8);
 });
 
-test("holo-5os-tier4-shards.yml passes 10-lib matrix, cache, skip-fastpath, deterministic flags, WebAssembly.validate, and SLSA", () => {
+test("holo-5os-tier4-shards passes 10-lib matrix, cache, skip-fastpath, deterministic flags, companion .mts, WebAssembly.validate, and SLSA", () => {
   const result = validateTier4Workflow(TIER4_WORKFLOW_PATH);
   assert.deepEqual(result.matrixLibs, [...EXPECTED_TIER4_LIBS]);
   assert.equal(result.hasForceRebuildInput, true);
@@ -55,10 +72,11 @@ test("holo-5os-tier4-shards.yml passes 10-lib matrix, cache, skip-fastpath, dete
   assert.equal(result.hasDeterministicFlags, true);
   assert.equal(result.hasReceiptEmission, true);
   assert.equal(result.hasPerShardSlsa, true);
+  assert.equal(result.hasCompanionMts, true);
   assert.equal(result.repairedShards.length, 10);
 });
 
-test("holo-5os-tier5-shards.yml passes 12-lib matrix, cache, skip-fastpath, deterministic flags, WebAssembly.validate, and SLSA", () => {
+test("holo-5os-tier5-shards passes 12-lib matrix, cache, skip-fastpath, deterministic flags, companion .mts, WebAssembly.validate, and SLSA", () => {
   const result = validateTier5Workflow(TIER5_WORKFLOW_PATH);
   assert.deepEqual(result.matrixLibs, [...EXPECTED_TIER5_LIBS]);
   assert.equal(result.hasForceRebuildInput, true);
@@ -67,6 +85,7 @@ test("holo-5os-tier5-shards.yml passes 12-lib matrix, cache, skip-fastpath, dete
   assert.equal(result.hasDeterministicFlags, true);
   assert.equal(result.hasReceiptEmission, true);
   assert.equal(result.hasPerShardSlsa, true);
+  assert.equal(result.hasCompanionMts, true);
   assert.equal(result.repairedShards.length, 12);
 });
 

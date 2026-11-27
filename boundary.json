@@ -2,7 +2,8 @@
   "schema": "holo-boundary.v1",
   "plane": 1,
   "includePaths": [
-    "scripts"
+    "scripts",
+    ".github/workflows"
   ],
   "publicEntrypoints": [
     "mirror-index.json",
