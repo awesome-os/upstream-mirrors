@@ -85,11 +85,50 @@ function fetchTagTarball(repo: string, tag: string, dest = "src"): void {
   }
 }
 
+export type Tier6Target = "linux-x64" | "linux-arm64" | "win-x64" | "macos-arm64" | "wasm32-wasi";
+export type Tier6TargetOption = Tier6Target | "all";
+
+export const TIER6_TARGETS: readonly Tier6Target[] = [
+  "linux-x64",
+  "linux-arm64",
+  "win-x64",
+  "macos-arm64",
+  "wasm32-wasi",
+];
+
+export const TIER6_SUPPORTED_TARGETS: Record<string, readonly Tier6Target[]> = {
+  protobuf: ["linux-x64", "linux-arm64", "win-x64"],
+  icu4c: ["linux-x64", "linux-arm64", "win-x64", "macos-arm64"],
+  vips: ["linux-x64"],
+  openblas: ["linux-x64", "linux-arm64", "win-x64"],
+  onednn: ["linux-x64", "linux-arm64", "win-x64"],
+  cmake: ["linux-x64", "linux-arm64", "win-x64"],
+  nccl: TIER6_TARGETS,
+  rocm: TIER6_TARGETS,
+  triton: TIER6_TARGETS,
+  "flash-attention": TIER6_TARGETS,
+  "xdna-driver": TIER6_TARGETS,
+};
+
+export function normalizeTier6Target(raw?: string): Tier6TargetOption {
+  if (!raw || raw === "all") return "all";
+  const normalized = raw === "win64" ? "win-x64" : raw;
+  if ((TIER6_TARGETS as readonly string[]).includes(normalized)) {
+    return normalized as Tier6Target;
+  }
+  throw new Error(`Unknown Tier-6 target '${raw}' (expected one of: all, ${TIER6_TARGETS.join(", ")})`);
+}
+
+function targetToArtifactTag(target: Tier6Target): string {
+  return target === "win-x64" ? "win64" : target;
+}
+
 export interface Tier6CliOptions {
   cmd?: string;
   smokeOnly: boolean;
   verifyTarget?: string;
   libKey?: string;
+  target?: Tier6TargetOption;
 }
 
 export function parseTier6CliArgs(argv: readonly string[]): Tier6CliOptions {
@@ -102,6 +141,10 @@ export function parseTier6CliArgs(argv: readonly string[]): Tier6CliOptions {
       opts.verifyTarget = argv[++i];
     } else if (arg.startsWith("--verify-target=")) {
       opts.verifyTarget = arg.slice("--verify-target=".length);
+    } else if (arg === "--target") {
+      opts.target = normalizeTier6Target(argv[++i]);
+    } else if (arg.startsWith("--target=")) {
+      opts.target = normalizeTier6Target(arg.slice("--target=".length));
     } else if (arg === "--lib") {
       opts.libKey = argv[++i];
     } else if (arg.startsWith("--lib=")) {
@@ -641,7 +684,12 @@ export function runHostSmokePreflight(opts: {
   }
 }
 
-function compileMultiOsFailFast(libOut: string, opts: CompileTargetOptions, onLinuxX64Ready: () => void): void {
+function compileMultiOsFailFast(
+  libOut: string,
+  opts: CompileTargetOptions,
+  onLinuxX64Ready: () => void,
+  target: Tier6TargetOption = "all"
+): void {
   const fn = opts.cxx ? zigCxx : zigCc;
   const common = opts.commonArgs ?? [];
   const winArgs = opts.winArgs ?? [];
@@ -650,56 +698,64 @@ function compileMultiOsFailFast(libOut: string, opts: CompileTargetOptions, onLi
   const wasiArgs = opts.wasiArgs ?? [];
   const evex = opts.evex512 ? ["-mevex512"] : [];
   const winExport = opts.winExportAll ? ["-Wl,--export-all-symbols"] : [];
+  const want = (t: Tier6Target): boolean => target === "all" || target === t;
 
-  fn("x86_64-linux-gnu", [
-    "-O2",
-    ...evex,
-    "-shared",
-    "-fPIC",
-    "-s",
-    ...common,
-    ...linuxArgs,
-    "-o",
-    `dist/${libOut}-linux-x64.so`,
-  ]);
+  if (want("linux-x64")) {
+    fn("x86_64-linux-gnu", [
+      "-O2",
+      ...evex,
+      "-shared",
+      "-fPIC",
+      "-s",
+      ...common,
+      ...linuxArgs,
+      "-o",
+      `dist/${libOut}-linux-x64.so`,
+    ]);
+    onLinuxX64Ready();
+  }
 
-  onLinuxX64Ready();
+  if (want("linux-arm64")) {
+    fn("aarch64-linux-gnu", [
+      "-O2",
+      "-shared",
+      "-fPIC",
+      "-s",
+      ...common,
+      ...linuxArgs,
+      "-o",
+      `dist/${libOut}-linux-arm64.so`,
+    ]);
+  }
 
-  fn("aarch64-linux-gnu", [
-    "-O2",
-    "-shared",
-    "-fPIC",
-    "-s",
-    ...common,
-    ...linuxArgs,
-    "-o",
-    `dist/${libOut}-linux-arm64.so`,
-  ]);
+  if (want("win-x64")) {
+    fn("x86_64-windows-gnu", [
+      "-O2",
+      ...evex,
+      "-shared",
+      "-s",
+      ...winExport,
+      ...common,
+      ...winArgs,
+      "-o",
+      `dist/${libOut}-win64.dll`,
+      `-Wl,--out-implib,dist/${libOut}-win64.dll.a`,
+    ]);
+  }
 
-  fn("x86_64-windows-gnu", [
-    "-O2",
-    ...evex,
-    "-shared",
-    "-s",
-    ...winExport,
-    ...common,
-    ...winArgs,
-    "-o",
-    `dist/${libOut}-win64.dll`,
-    `-Wl,--out-implib,dist/${libOut}-win64.dll.a`,
-  ]);
+  if (want("macos-arm64")) {
+    fn("aarch64-macos", [
+      "-O2",
+      "-shared",
+      "-fPIC",
+      ...common,
+      ...macArgs,
+      "-o",
+      `dist/${libOut}-macos-arm64.dylib`,
+    ]);
+  }
 
-  fn("aarch64-macos", [
-    "-O2",
-    "-shared",
-    "-fPIC",
-    ...common,
-    ...macArgs,
-    "-o",
-    `dist/${libOut}-macos-arm64.dylib`,
-  ]);
-
-  if (opts.includeWasi) {
+  if (opts.includeWasi && want("wasm32-wasi")) {
     fn("wasm32-wasi", [
       "-O2",
       "-mexec-model=reactor",
@@ -720,10 +776,12 @@ function parseSemverTuple(ver: string): [number, number, number] {
 export function buildTier6Library(
   libKey: string,
   pin: LibraryPin,
-  opts?: { smokeOnly?: boolean; verifyTarget?: string }
+  opts?: { smokeOnly?: boolean; verifyTarget?: string; target?: Tier6TargetOption }
 ): void {
   const { libOut, repo, tag, version } = pin;
   const kind = TIER6_KIND_MAP[libKey] ?? "runtime-library";
+  const target: Tier6TargetOption = opts?.target ?? "all";
+  const want = (t: Tier6Target): boolean => target === "all" || target === t;
 
   if (opts?.smokeOnly) {
     const smokeProbe = createSmokeProbe(libKey, pin);
@@ -731,12 +789,18 @@ export function buildTier6Library(
     return;
   }
 
-  console.log(`=== Building Tier-6 ${libKey} (${libOut}, kind=${kind}) @ ${repo} ${tag} (${version}) ===`);
+  const supported = TIER6_SUPPORTED_TARGETS[libKey] ?? [];
+  if (target !== "all" && !supported.includes(target)) {
+    console.log(`SKIP: ${libKey} does not target ${target}`);
+    return;
+  }
+
+  console.log(`=== Building Tier-6 ${libKey} (${libOut}, kind=${kind}, target=${target}) @ ${repo} ${tag} (${version}) ===`);
   fs.mkdirSync("src", { recursive: true });
   fs.mkdirSync("dist", { recursive: true });
   fs.rmSync("dist/smoke-failure-report.txt", { force: true });
   const nproc = cpuCount();
-  const preflightTarget = opts?.verifyTarget ?? "linux-x64";
+  const preflightTarget = opts?.verifyTarget ?? (target === "all" ? "linux-x64" : targetToArtifactTag(target));
   let smokeProbe: (() => void) | undefined = createSmokeProbe(libKey, pin);
   const runLinuxX64Preflight = (): void => {
     runHostSmokePreflight({ libKey, pin, verifyTarget: preflightTarget, smokeProbe });
@@ -809,15 +873,21 @@ endif()
           ...extraLink, "-o", outPath,
         ]);
       };
-      linkPbShared(buildPb("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu"), "x86_64-linux-gnu", `dist/${libOut}-linux-x64.so`, ["-lpthread", "-lm"]);
-      runLinuxX64Preflight();
-      linkPbShared(buildPb("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu"), "aarch64-linux-gnu", `dist/${libOut}-linux-arm64.so`, ["-lpthread", "-lm"]);
-      linkPbShared(
-        buildPb("win64", "Windows", "AMD64", "x86_64-windows-gnu"),
-        "x86_64-windows-gnu",
-        `dist/${libOut}-win64.dll`,
-        ["-Wl,--export-all-symbols", `-Wl,--out-implib,dist/${libOut}-win64.dll.a`, "-ldbghelp", "-ladvapi32"]
-      );
+      if (want("linux-x64")) {
+        linkPbShared(buildPb("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu"), "x86_64-linux-gnu", `dist/${libOut}-linux-x64.so`, ["-lpthread", "-lm"]);
+        runLinuxX64Preflight();
+      }
+      if (want("linux-arm64")) {
+        linkPbShared(buildPb("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu"), "aarch64-linux-gnu", `dist/${libOut}-linux-arm64.so`, ["-lpthread", "-lm"]);
+      }
+      if (want("win-x64")) {
+        linkPbShared(
+          buildPb("win64", "Windows", "AMD64", "x86_64-windows-gnu"),
+          "x86_64-windows-gnu",
+          `dist/${libOut}-win64.dll`,
+          ["-Wl,--export-all-symbols", `-Wl,--out-implib,dist/${libOut}-win64.dll.a`, "-ldbghelp", "-ladvapi32"]
+        );
+      }
       break;
     }
 
@@ -854,7 +924,8 @@ endif()
           linuxArgs: ["-lpthread", "-lm"],
           macArgs: ["-I/tmp/icu_mac_inc", "-lpthread", "-lm"],
         },
-        runLinuxX64Preflight
+        runLinuxX64Preflight,
+        target
       );
       break;
     }
@@ -923,13 +994,19 @@ endif()
         run("cmake", ["--build", b, `-j${nproc}`]);
         return b;
       };
-      copyIfFound(findFirstMatch(buildBlas("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "CORE2", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-x64.so`);
-      runLinuxX64Preflight();
-      copyIfFound(findFirstMatch(buildBlas("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "ARMV8", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-arm64.so`);
-      const bWin = buildBlas("win64", "Windows", "AMD64", "x86_64-windows-gnu", "CORE2", "-Wl,--export-all-symbols -s");
-      copyIfFound(findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll"), 3), `dist/${libOut}-win64.dll`);
-      const imp = findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll.a"), 3);
-      if (imp) fs.copyFileSync(imp, `dist/${libOut}-win64.dll.a`);
+      if (want("linux-x64")) {
+        copyIfFound(findFirstMatch(buildBlas("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "CORE2", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-x64.so`);
+        runLinuxX64Preflight();
+      }
+      if (want("linux-arm64")) {
+        copyIfFound(findFirstMatch(buildBlas("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "ARMV8", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-arm64.so`);
+      }
+      if (want("win-x64")) {
+        const bWin = buildBlas("win64", "Windows", "AMD64", "x86_64-windows-gnu", "CORE2", "-Wl,--export-all-symbols -s");
+        copyIfFound(findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll"), 3), `dist/${libOut}-win64.dll`);
+        const imp = findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll.a"), 3);
+        if (imp) fs.copyFileSync(imp, `dist/${libOut}-win64.dll.a`);
+      }
       break;
     }
 
@@ -986,13 +1063,19 @@ exec zig c++ -target ${zigT} ${det} "\${args[@]}"
         run("cmake", ["--build", b, "--target", "dnnl", `-j${nproc}`]);
         return b;
       };
-      copyIfFound(findFirstMatch(buildDnn("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -lm -Wl,-z,nodelete -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-x64.so`);
-      runLinuxX64Preflight();
-      copyIfFound(findFirstMatch(buildDnn("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -lm -Wl,-z,nodelete -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-arm64.so`);
-      const bWin = buildDnn("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-s");
-      copyIfFound(findFirstMatch(bWin, (n) => n.includes("dnnl") && n.endsWith(".dll"), 3), `dist/${libOut}-win64.dll`);
-      const imp = findFirstMatch(bWin, (n) => n.includes("dnnl") && n.endsWith(".dll.a"), 3);
-      if (imp) fs.copyFileSync(imp, `dist/${libOut}-win64.dll.a`);
+      if (want("linux-x64")) {
+        copyIfFound(findFirstMatch(buildDnn("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -lm -Wl,-z,nodelete -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-x64.so`);
+        runLinuxX64Preflight();
+      }
+      if (want("linux-arm64")) {
+        copyIfFound(findFirstMatch(buildDnn("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -lm -Wl,-z,nodelete -s"), (n) => n.startsWith("libdnnl.so"), 3), `dist/${libOut}-linux-arm64.so`);
+      }
+      if (want("win-x64")) {
+        const bWin = buildDnn("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-s");
+        copyIfFound(findFirstMatch(bWin, (n) => n.includes("dnnl") && n.endsWith(".dll"), 3), `dist/${libOut}-win64.dll`);
+        const imp = findFirstMatch(bWin, (n) => n.includes("dnnl") && n.endsWith(".dll.a"), 3);
+        if (imp) fs.copyFileSync(imp, `dist/${libOut}-win64.dll.a`);
+      }
       break;
     }
 
@@ -1034,22 +1117,28 @@ exec zig ${tool} -target ${zigT} ${det} "\${args[@]}"
         run("cmake", ["--build", b, "--target", "cmake", `-j${nproc}`]);
         return `${b}/bin`;
       };
-      copyIfFound(findFirstMatch(buildCmake("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-s"), (n) => n === "cmake", 1), `dist/${libOut}-linux-x64`);
-      runLinuxX64Preflight();
-      copyIfFound(
-        findFirstMatch(
-          buildCmake("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-s", [
-            "-DHAVE_POLL_FINE_EXITCODE=0",
-            "-DHAVE_POLL_FINE_EXITCODE__TRYRUN_OUTPUT=",
-            "-DKWSYS_LFS_WORKS=1",
-            "-DKWSYS_LFS_WORKS__TRYRUN_OUTPUT=",
-          ]),
-          (n) => n === "cmake",
-          1
-        ),
-        `dist/${libOut}-linux-arm64`
-      );
-      copyIfFound(findFirstMatch(buildCmake("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-s"), (n) => n === "cmake.exe", 1), `dist/${libOut}-win64.exe`);
+      if (want("linux-x64")) {
+        copyIfFound(findFirstMatch(buildCmake("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-s"), (n) => n === "cmake", 1), `dist/${libOut}-linux-x64`);
+        runLinuxX64Preflight();
+      }
+      if (want("linux-arm64")) {
+        copyIfFound(
+          findFirstMatch(
+            buildCmake("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-s", [
+              "-DHAVE_POLL_FINE_EXITCODE=0",
+              "-DHAVE_POLL_FINE_EXITCODE__TRYRUN_OUTPUT=",
+              "-DKWSYS_LFS_WORKS=1",
+              "-DKWSYS_LFS_WORKS__TRYRUN_OUTPUT=",
+            ]),
+            (n) => n === "cmake",
+            1
+          ),
+          `dist/${libOut}-linux-arm64`
+        );
+      }
+      if (want("win-x64")) {
+        copyIfFound(findFirstMatch(buildCmake("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-s"), (n) => n === "cmake.exe", 1), `dist/${libOut}-win64.exe`);
+      }
       break;
     }
 
@@ -1091,7 +1180,7 @@ ncclResult_t ncclGetVersion(int *version) { if (!version) return ncclInvalidArgu
 `,
         "utf8"
       );
-      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "-I/tmp/nccl_inc", "/tmp/nccl_probe.c"] }, runLinuxX64Preflight);
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "-I/tmp/nccl_inc", "/tmp/nccl_probe.c"] }, runLinuxX64Preflight, target);
       break;
     }
 
@@ -1115,7 +1204,7 @@ B8G_EXP const char* b8g_rocm_tag(void) { return "${tag}"; }
 `,
         "utf8"
       );
-      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/rocm_probe.c"] }, runLinuxX64Preflight);
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/rocm_probe.c"] }, runLinuxX64Preflight, target);
       break;
     }
 
@@ -1138,7 +1227,7 @@ B8G_EXP const char* b8g_triton_tag(void) { return "${tag}"; }
 `,
         "utf8"
       );
-      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/triton_probe.c"] }, runLinuxX64Preflight);
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/triton_probe.c"] }, runLinuxX64Preflight, target);
       break;
     }
 
@@ -1163,7 +1252,7 @@ B8G_EXP const char* b8g_flash_attention_version_str(void) { return "${parsedVer}
 `,
         "utf8"
       );
-      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/flash_probe.c"] }, runLinuxX64Preflight);
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "/tmp/flash_probe.c"] }, runLinuxX64Preflight, target);
       break;
     }
 
@@ -1215,7 +1304,7 @@ B8G_EXP uint32_t b8g_xdna_ioctl_exec_cmd(void) { return DRM_AMDXDNA_EXEC_CMD; }
 `,
         "utf8"
       );
-      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "-I/tmp/xdna_inc", "-Isrc/src/include/uapi", "/tmp/xdna_probe.c"] }, runLinuxX64Preflight);
+      compileMultiOsFailFast(libOut, { includeWasi: true, commonArgs: ["-std=c11", "-I/tmp/xdna_inc", "-Isrc/src/include/uapi", "/tmp/xdna_probe.c"] }, runLinuxX64Preflight, target);
       break;
     }
 
@@ -1226,13 +1315,51 @@ B8G_EXP uint32_t b8g_xdna_ioctl_exec_cmd(void) { return DRM_AMDXDNA_EXEC_CMD; }
   void detFlagsForTarget;
   let verifiedHeaders: VerifiedHeaderInfo[];
   try {
-    verifiedHeaders = verifyAndSmokeTest({ libKey, libOut, cliBinaries: ["cmake"] });
+    if (target === "all" || target === "linux-x64") {
+      verifiedHeaders = verifyAndSmokeTest({ libKey, libOut, cliBinaries: ["cmake"], smokeProbe });
+    } else {
+      verifiedHeaders = runHostSmokePreflight({ libKey, pin, verifyTarget: targetToArtifactTag(target) });
+    }
   } catch (err) {
-    const primaryArtifact = libKey === "cmake" ? `dist/${libOut}-linux-x64` : `dist/${libOut}-linux-x64.so`;
-    writeSmokeFailureReport({ libKey, libOut, verifyTarget: "all", artifactPath: primaryArtifact, err });
+    const primaryArtifact =
+      target === "all" || target === "linux-x64"
+        ? libKey === "cmake"
+          ? `dist/${libOut}-linux-x64`
+          : `dist/${libOut}-linux-x64.so`
+        : path.join("dist", `${libOut}-${targetToArtifactTag(target)}`);
+    writeSmokeFailureReport({ libKey, libOut, verifyTarget: target, artifactPath: primaryArtifact, err });
     throw err;
   }
   emitSha512AndReceipt({ libKey, libOut, repo, tag, version, kind, verifiedHeaders });
+  if (target !== "all") {
+    const sumSrc = path.join("dist", `SHA512SUMS-${libKey}.txt`);
+    const sumDst = path.join("dist", `SHA512SUMS-${libKey}-${target}.txt`);
+    if (fs.existsSync(sumSrc)) fs.renameSync(sumSrc, sumDst);
+    const rcptSrc = path.join("dist", `${libOut}-receipt.json`);
+    const rcptDst = path.join("dist", `${libOut}-${target}-receipt.json`);
+    if (fs.existsSync(rcptSrc)) fs.renameSync(rcptSrc, rcptDst);
+  }
+}
+
+function mergePerTargetTier6Sums(artifactsRoot = "/tmp/artifacts"): void {
+  if (!fs.existsSync(artifactsRoot)) return;
+  for (const lib of TIER6_LIBS) {
+    const combinedDir = path.join(artifactsRoot, `tier6-sums-${lib}`);
+    const combinedPath = path.join(combinedDir, `SHA512SUMS-${lib}.txt`);
+    if (fs.existsSync(combinedPath)) continue;
+    const lines: string[] = [];
+    for (const t of TIER6_TARGETS) {
+      const perTarget = path.join(artifactsRoot, `tier6-sums-${lib}-${t}`, `SHA512SUMS-${lib}-${t}.txt`);
+      if (!fs.existsSync(perTarget)) continue;
+      for (const line of fs.readFileSync(perTarget, "utf8").split(/\r?\n/)) {
+        if (line.trim()) lines.push(line.trim());
+      }
+    }
+    if (lines.length > 0) {
+      fs.mkdirSync(combinedDir, { recursive: true });
+      fs.writeFileSync(combinedPath, `${lines.join("\n")}\n`, "utf8");
+    }
+  }
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
@@ -1249,20 +1376,34 @@ if (isMain) {
     });
   } else if (cmd === "build") {
     const libKey = cli.libKey || process.env.LIB_KEY || "";
+    const target = cli.target ?? normalizeTier6Target(process.env.TARGET);
     const versions = JSON.parse(process.env.VERSIONS_JSON || "{}") as Record<string, LibraryPin>;
     const pin = versions[libKey] ?? TIER6_DEFAULTS[libKey];
     if (!pin) throw new Error(`Missing version pin for ${libKey}`);
     if (cli.smokeOnly) {
-      buildTier6Library(libKey, pin, { smokeOnly: true, verifyTarget: cli.verifyTarget });
+      buildTier6Library(libKey, pin, { smokeOnly: true, verifyTarget: cli.verifyTarget, target });
       process.exit(0);
     }
     appendGithubOutput({ lib_out: pin.libOut });
-    if (checkSkipMaterialized(libKey, pin.libOut, pin.version, process.env.RELEASE_TAG || "v11-max-5os-latest")) {
+    const supported = TIER6_SUPPORTED_TARGETS[libKey] ?? [];
+    if (target !== "all" && !supported.includes(target)) {
+      appendGithubOutput({ skipped: "true" });
+      console.log(`SKIP: ${libKey} does not target ${target}`);
+      process.exit(0);
+    }
+    const releaseTag = process.env.RELEASE_TAG || "v11-max-5os-latest";
+    const alreadyMaterialized =
+      target !== "all"
+        ? checkSkipMaterialized(libKey, `${pin.libOut}-${target}`, pin.version, releaseTag) ||
+          checkSkipMaterialized(libKey, pin.libOut, pin.version, releaseTag)
+        : checkSkipMaterialized(libKey, pin.libOut, pin.version, releaseTag);
+    if (alreadyMaterialized) {
       process.exit(0);
     }
     appendGithubOutput({ skipped: "false" });
-    buildTier6Library(libKey, pin, { verifyTarget: cli.verifyTarget });
+    buildTier6Library(libKey, pin, { verifyTarget: cli.verifyTarget, target });
   } else if (cmd === "finalize") {
+    mergePerTargetTier6Sums("/tmp/artifacts");
     finalizeTierSumsPhase({
       tierTitle: "Holo 5-OS Tier-6 Shards",
       resolvedArtifactName: "resolved-tier6-versions",

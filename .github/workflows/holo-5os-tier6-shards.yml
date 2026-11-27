@@ -50,7 +50,7 @@ jobs:
     timeout-minutes: 90
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         lib:
           - protobuf
@@ -64,6 +64,7 @@ jobs:
           - triton
           - flash-attention
           - xdna-driver
+        target: [linux-x64, linux-arm64, win-x64, macos-arm64, wasm32-wasi]
     steps:
       - uses: actions/checkout@v7
         with: { sparse-checkout: .github/workflows/ }
@@ -79,17 +80,18 @@ jobs:
       - id: build
         env:
           LIB_KEY: ${{ matrix.lib }}
+          TARGET: ${{ matrix.target }}
           VERSIONS_JSON: ${{ needs.ensure-release.outputs.versions_json }}
           RELEASE_TAG: ${{ needs.ensure-release.outputs.release_tag }}
           FORCE_REBUILD: ${{ inputs.force_rebuild == true && 'true' || 'false' }}
-        run: node .github/workflows/holo-5os-tier6-shards.mts build
+        run: node .github/workflows/holo-5os-tier6-shards.mts build --target ${{ matrix.target }}
       - name: Upload smoke-failure report & linux-x64 binaries
         if: failure()
         uses: actions/upload-artifact@v5
-        with: { name: "tier6-smoke-failure-${{ matrix.lib }}", path: "dist/smoke-failure-report.txt\ndist/*-linux-x64.*\ndist/*-linux-x64", retention-days: 1, if-no-files-found: ignore }
+        with: { name: "tier6-smoke-failure-${{ matrix.lib }}-${{ matrix.target }}", path: "dist/smoke-failure-report.txt\ndist/*-linux-x64.*\ndist/*-linux-x64", retention-days: 1, if-no-files-found: ignore }
       - uses: actions/upload-artifact@v7
         if: ${{ steps.build.outputs.skipped != 'true' }}
-        with: { name: "tier6-sums-${{ matrix.lib }}", path: "dist/SHA512SUMS-${{ matrix.lib }}.txt", retention-days: 7 }
+        with: { name: "tier6-sums-${{ matrix.lib }}-${{ matrix.target }}", path: "dist/SHA512SUMS-${{ matrix.lib }}-${{ matrix.target }}.txt", retention-days: 7 }
       - if: ${{ steps.build.outputs.skipped != 'true' }}
         env: { TAG: "${{ needs.ensure-release.outputs.release_tag }}" }
         run: node .github/workflows/holo-workflow-runtime.mts upload
