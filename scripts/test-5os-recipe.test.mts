@@ -5,16 +5,19 @@ import test from "node:test";
 import {
   EXPECTED_TIER2_LIBS,
   EXPECTED_TIER3_LIBS,
+  EXPECTED_TIER4_LIBS,
   dryCompileC11FiveTargets,
   resolveZigBinary,
   validateShardReceipt,
   validateTier2Workflow,
   validateTier3Workflow,
+  validateTier4Workflow,
 } from "./test-5os-recipe.mts";
 
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 const WORKFLOW_PATH = path.join(REPO_ROOT, ".github", "workflows", "holo-5os-tier2-shards.yml");
 const TIER3_WORKFLOW_PATH = path.join(REPO_ROOT, ".github", "workflows", "holo-5os-tier3-shards.yml");
+const TIER4_WORKFLOW_PATH = path.join(REPO_ROOT, ".github", "workflows", "holo-5os-tier4-shards.yml");
 
 test("holo-5os-tier2-shards.yml passes matrix, cache, skip-fastpath, deterministic flags, and all 6 shard repairs", () => {
   const result = validateTier2Workflow(WORKFLOW_PATH);
@@ -38,6 +41,18 @@ test("holo-5os-tier3-shards.yml passes 8-lib matrix, cache, skip-fastpath, deter
   assert.equal(result.hasReceiptEmission, true);
   assert.equal(result.hasPerShardSlsa, true);
   assert.equal(result.repairedShards.length, 8);
+});
+
+test("holo-5os-tier4-shards.yml passes 10-lib matrix, cache, skip-fastpath, deterministic flags, WebAssembly.validate, and SLSA", () => {
+  const result = validateTier4Workflow(TIER4_WORKFLOW_PATH);
+  assert.deepEqual(result.matrixLibs, [...EXPECTED_TIER4_LIBS]);
+  assert.equal(result.hasForceRebuildInput, true);
+  assert.equal(result.hasZigCache, true);
+  assert.equal(result.hasSkipFastPath, true);
+  assert.equal(result.hasDeterministicFlags, true);
+  assert.equal(result.hasReceiptEmission, true);
+  assert.equal(result.hasPerShardSlsa, true);
+  assert.equal(result.repairedShards.length, 10);
 });
 
 test("validateShardReceipt enforces holo-v11.shard-receipt.v1 schema", () => {

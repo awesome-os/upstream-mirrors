@@ -30,6 +30,19 @@ export const EXPECTED_TIER3_LIBS = [
   "libarchive",
 ] as const;
 
+export const EXPECTED_TIER4_LIBS = [
+  "liburing",
+  "ninja",
+  "libavif",
+  "cairo",
+  "mariadb-connector-c",
+  "libgit2",
+  "curl",
+  "openssl",
+  "limine",
+  "vulkan-loader",
+] as const;
+
 export const FIVE_OS_TARGETS = [
   { target: "x86_64-windows-gnu", ext: "win64.dll", kind: "shared" },
   { target: "x86_64-linux-gnu", ext: "linux-x64.so", kind: "linux-shared" },
@@ -251,32 +264,37 @@ export function validateTier2Workflow(workflowPath: string): WorkflowValidationR
   };
 }
 
-export function validateTier3Workflow(workflowPath: string): WorkflowValidationResult {
+function validateTierShardWorkflow(
+  workflowPath: string,
+  expectedLibs: readonly string[],
+  workflowRelPath: string,
+  tierLabel: string
+): WorkflowValidationResult {
   const yml = fs.readFileSync(workflowPath, "utf8");
   const matrixLibs = extractMatrixLibs(yml);
 
-  if (matrixLibs.length !== EXPECTED_TIER3_LIBS.length) {
-    throw new Error(`Expected ${EXPECTED_TIER3_LIBS.length} Tier-3 matrix libs, found ${matrixLibs.length}`);
+  if (matrixLibs.length !== expectedLibs.length) {
+    throw new Error(`Expected ${expectedLibs.length} ${tierLabel} matrix libs, found ${matrixLibs.length}`);
   }
-  for (const lib of EXPECTED_TIER3_LIBS) {
+  for (const lib of expectedLibs) {
     if (!matrixLibs.includes(lib)) {
-      throw new Error(`Missing Tier-3 matrix lib: ${lib}`);
+      throw new Error(`Missing ${tierLabel} matrix lib: ${lib}`);
     }
   }
 
   const hasForceRebuildInput =
     /force_rebuild:\s*\r?\n[\s\S]*?type:\s*boolean\s*\r?\n\s*default:\s*false/.test(yml);
   if (!hasForceRebuildInput) {
-    throw new Error("Tier-3 missing workflow_dispatch.inputs.force_rebuild (type: boolean, default: false)");
+    throw new Error(`${tierLabel} missing workflow_dispatch.inputs.force_rebuild (type: boolean, default: false)`);
   }
 
   const hasZigCache =
     yml.includes("uses: actions/cache@v4") &&
     yml.includes("path: ~/.cache/zig") &&
-    yml.includes("key: ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-${{ hashFiles('.github/workflows/holo-5os-tier3-shards.yml') }}") &&
+    yml.includes(`key: \${{ runner.os }}-zig-0.14.0-\${{ matrix.lib }}-\${{ hashFiles('${workflowRelPath}') }}`) &&
     yml.includes("${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-");
   if (!hasZigCache) {
-    throw new Error("Tier-3 missing actions/cache@v4 configuration for ~/.cache/zig");
+    throw new Error(`${tierLabel} missing actions/cache@v4 configuration for ~/.cache/zig`);
   }
 
   const hasSkipFastPath =
@@ -284,14 +302,14 @@ export function validateTier3Workflow(workflowPath: string): WorkflowValidationR
     yml.includes("skipped=true") &&
     yml.includes("steps.build.outputs.skipped != 'true'");
   if (!hasSkipFastPath) {
-    throw new Error("Tier-3 missing skip-unchanged-shard check or skipped != 'true' guards");
+    throw new Error(`${tierLabel} missing skip-unchanged-shard check or skipped != 'true' guards`);
   }
 
   const hasDeterministicFlags =
     yml.includes("-ffile-prefix-map=$PWD=.") &&
     yml.includes("-Wl,--build-id=none");
   if (!hasDeterministicFlags) {
-    throw new Error("Tier-3 missing deterministic compiler flags (-ffile-prefix-map=$PWD=. / -Wl,--build-id=none)");
+    throw new Error(`${tierLabel} missing deterministic compiler flags (-ffile-prefix-map=$PWD=. / -Wl,--build-id=none)`);
   }
 
   const zigLines = yml
@@ -301,10 +319,10 @@ export function validateTier3Workflow(workflowPath: string): WorkflowValidationR
   for (const line of zigLines) {
     const isLinux = line.includes("linux-gnu");
     if (isLinux && !line.includes("$DET_LINUX_FLAGS")) {
-      throw new Error(`Tier-3 Linux zig invocation missing $DET_LINUX_FLAGS: ${line}`);
+      throw new Error(`${tierLabel} Linux zig invocation missing $DET_LINUX_FLAGS: ${line}`);
     }
     if (!isLinux && !line.includes("$DET_FLAGS")) {
-      throw new Error(`Tier-3 Non-Linux zig invocation missing $DET_FLAGS: ${line}`);
+      throw new Error(`${tierLabel} Non-Linux zig invocation missing $DET_FLAGS: ${line}`);
     }
   }
 
@@ -314,7 +332,7 @@ export function validateTier3Workflow(workflowPath: string): WorkflowValidationR
     yml.includes("gh release upload \"$TAG\" dist/* --repo awesome-os/upstream-mirrors --clobber") &&
     yml.includes("WebAssembly.validate(buf)");
   if (!hasReceiptEmission) {
-    throw new Error("Tier-3 missing canonical per-shard receipt generation, release upload, or WebAssembly.validate");
+    throw new Error(`${tierLabel} missing canonical per-shard receipt generation, release upload, or WebAssembly.validate`);
   }
 
   const hasPerShardSlsa =
@@ -322,13 +340,13 @@ export function validateTier3Workflow(workflowPath: string): WorkflowValidationR
       yml
     );
   if (!hasPerShardSlsa) {
-    throw new Error("Tier-3 missing guarded per-shard actions/attest-build-provenance@v2 step");
+    throw new Error(`${tierLabel} missing guarded per-shard actions/attest-build-provenance@v2 step`);
   }
 
-  for (const lib of EXPECTED_TIER3_LIBS) {
+  for (const lib of expectedLibs) {
     const block = extractCaseBlock(yml, lib);
     if (!block) {
-      throw new Error(`Tier-3 missing case block for ${lib}`);
+      throw new Error(`${tierLabel} missing case block for ${lib}`);
     }
   }
 
@@ -340,8 +358,26 @@ export function validateTier3Workflow(workflowPath: string): WorkflowValidationR
     hasDeterministicFlags,
     hasReceiptEmission,
     hasPerShardSlsa,
-    repairedShards: [...EXPECTED_TIER3_LIBS],
+    repairedShards: [...expectedLibs],
   };
+}
+
+export function validateTier3Workflow(workflowPath: string): WorkflowValidationResult {
+  return validateTierShardWorkflow(
+    workflowPath,
+    EXPECTED_TIER3_LIBS,
+    ".github/workflows/holo-5os-tier3-shards.yml",
+    "Tier-3"
+  );
+}
+
+export function validateTier4Workflow(workflowPath: string): WorkflowValidationResult {
+  return validateTierShardWorkflow(
+    workflowPath,
+    EXPECTED_TIER4_LIBS,
+    ".github/workflows/holo-5os-tier4-shards.yml",
+    "Tier-4"
+  );
 }
 
 export function resolveZigBinary(): string | null {
