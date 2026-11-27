@@ -38,7 +38,7 @@ jobs:
 
       - name: Checkout Sparse Mirror Branch (if mirror-backed)
         if: matrix.engine != 'sqlite3'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: mirror/${{ matrix.engine }}
           path: src
@@ -126,7 +126,7 @@ jobs:
     needs: build-4os-shard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
       - name: Emit Unified 5-OS Holo v11 Registry Manifest

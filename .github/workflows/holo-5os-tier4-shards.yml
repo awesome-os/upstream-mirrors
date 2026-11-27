@@ -32,7 +32,7 @@ jobs:
       release_tag: ${{ steps.resolve.outputs.release_tag }}
       versions_json: ${{ steps.resolve.outputs.versions_json }}
     steps:
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -100,7 +100,7 @@ jobs:
             })().catch(e => { console.error(e); process.exit(1); });
           '
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: resolved-tier4-versions
           path: resolved-tier4-versions.json
@@ -124,7 +124,7 @@ jobs:
           - limine
           - vulkan-loader
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: |
             .github/workflows/holo-5os-tier4-shards.yml
@@ -133,14 +133,14 @@ jobs:
         with:
           version: 0.14.0
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/zig
           key: ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-${{ hashFiles('.github/workflows/holo-5os-tier4-shards.yml') }}
           restore-keys: |
             ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -964,7 +964,7 @@ jobs:
           '
           ls -lh dist/
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: ${{ steps.build.outputs.skipped != 'true' }}
         with:
           name: tier4-sums-${{ matrix.lib }}
@@ -979,7 +979,7 @@ jobs:
 
       - name: Attest SLSA Build Provenance for ${{ matrix.lib }} Shard & Receipt
         if: ${{ steps.build.outputs.skipped != 'true' }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: 'dist/*'
 
@@ -988,11 +988,11 @@ jobs:
     if: ${{ !cancelled() && needs.ensure-release.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: /tmp/artifacts
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
 
@@ -1056,6 +1056,6 @@ jobs:
 
       - name: Attest SLSA Build Provenance for Tier-4 Checksums
         if: ${{ hashFiles('/tmp/SHA512SUMS-tier4.txt') != '' }}
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: '/tmp/SHA512SUMS-tier4.txt'

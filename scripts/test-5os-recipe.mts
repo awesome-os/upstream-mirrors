@@ -43,6 +43,21 @@ export const EXPECTED_TIER4_LIBS = [
   "vulkan-loader",
 ] as const;
 
+export const EXPECTED_TIER5_LIBS = [
+  "vulkan-headers",
+  "spirv-headers",
+  "cccl",
+  "cutlass",
+  "dav1d",
+  "librdkafka",
+  "libsdl3",
+  "re2",
+  "spirv-tools",
+  "glslang",
+  "ffmpeg",
+  "meson",
+] as const;
+
 export const FIVE_OS_TARGETS = [
   { target: "x86_64-windows-gnu", ext: "win64.dll", kind: "shared" },
   { target: "x86_64-linux-gnu", ext: "linux-x64.so", kind: "linux-shared" },
@@ -135,12 +150,12 @@ export function validateTier2Workflow(workflowPath: string): WorkflowValidationR
   }
 
   const hasZigCache =
-    yml.includes("uses: actions/cache@v4") &&
+    yml.includes("uses: actions/cache@v6") &&
     yml.includes("path: ~/.cache/zig") &&
     yml.includes("key: ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-${{ hashFiles('.github/workflows/holo-5os-tier2-shards.yml') }}") &&
     yml.includes("${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-");
   if (!hasZigCache) {
-    throw new Error("Missing actions/cache@v4 configuration for ~/.cache/zig");
+    throw new Error("Missing actions/cache@v6 configuration for ~/.cache/zig");
   }
 
   const hasSkipFastPath =
@@ -182,11 +197,11 @@ export function validateTier2Workflow(workflowPath: string): WorkflowValidationR
   }
 
   const hasPerShardSlsa =
-    /if:\s*\$\{\{\s*steps\.build\.outputs\.skipped\s*!=\s*'true'\s*\}\}[\s\S]*?uses:\s*actions\/attest-build-provenance@v2/.test(
+    /if:\s*\$\{\{\s*steps\.build\.outputs\.skipped\s*!=\s*'true'\s*\}\}[\s\S]*?uses:\s*actions\/attest-build-provenance@v4/.test(
       yml
     );
   if (!hasPerShardSlsa) {
-    throw new Error("Missing guarded per-shard actions/attest-build-provenance@v2 step");
+    throw new Error("Missing guarded per-shard actions/attest-build-provenance@v4 step");
   }
 
   // Validate all 6 repaired Tier-2 shards
@@ -289,12 +304,12 @@ function validateTierShardWorkflow(
   }
 
   const hasZigCache =
-    yml.includes("uses: actions/cache@v4") &&
+    yml.includes("uses: actions/cache@v6") &&
     yml.includes("path: ~/.cache/zig") &&
     yml.includes(`key: \${{ runner.os }}-zig-0.14.0-\${{ matrix.lib }}-\${{ hashFiles('${workflowRelPath}') }}`) &&
     yml.includes("${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-");
   if (!hasZigCache) {
-    throw new Error(`${tierLabel} missing actions/cache@v4 configuration for ~/.cache/zig`);
+    throw new Error(`${tierLabel} missing actions/cache@v6 configuration for ~/.cache/zig`);
   }
 
   const hasSkipFastPath =
@@ -336,11 +351,11 @@ function validateTierShardWorkflow(
   }
 
   const hasPerShardSlsa =
-    /if:\s*\$\{\{\s*steps\.build\.outputs\.skipped\s*!=\s*'true'\s*\}\}[\s\S]*?uses:\s*actions\/attest-build-provenance@v2/.test(
+    /if:\s*\$\{\{\s*steps\.build\.outputs\.skipped\s*!=\s*'true'\s*\}\}[\s\S]*?uses:\s*actions\/attest-build-provenance@v4/.test(
       yml
     );
   if (!hasPerShardSlsa) {
-    throw new Error(`${tierLabel} missing guarded per-shard actions/attest-build-provenance@v2 step`);
+    throw new Error(`${tierLabel} missing guarded per-shard actions/attest-build-provenance@v4 step`);
   }
 
   for (const lib of expectedLibs) {
@@ -377,6 +392,15 @@ export function validateTier4Workflow(workflowPath: string): WorkflowValidationR
     EXPECTED_TIER4_LIBS,
     ".github/workflows/holo-5os-tier4-shards.yml",
     "Tier-4"
+  );
+}
+
+export function validateTier5Workflow(workflowPath: string): WorkflowValidationResult {
+  return validateTierShardWorkflow(
+    workflowPath,
+    EXPECTED_TIER5_LIBS,
+    ".github/workflows/holo-5os-tier5-shards.yml",
+    "Tier-5"
   );
 }
 
