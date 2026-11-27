@@ -839,8 +839,9 @@ void CFRelease(CFTypeRef cf);
       throw new Error(`Unknown Tier-4 libKey: ${libKey}`);
   }
 
-  verifyAndSmokeTest({ libKey, libOut, dlLdLibraryPath, cliBinaries: ["ninja", "limine"] });
-  emitSha512AndReceipt({ libKey, libOut, repo, tag, version });
+  const verifiedHeaders = verifyAndSmokeTest({ libKey, libOut, dlLdLibraryPath, cliBinaries: ["ninja", "limine"] });
+  const kind = libKey === "ninja" || libKey === "limine" ? "cli-tool" : "runtime-library";
+  emitSha512AndReceipt({ libKey, libOut, repo, tag, version, kind, verifiedHeaders });
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;

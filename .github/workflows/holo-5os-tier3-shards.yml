@@ -15,16 +15,16 @@ on:
   schedule:
     - cron: '0 8 * * 0'
   push:
-    branches:
-      - main
-    paths:
-      - '.github/workflows/holo-5os-tier3-shards.yml'
-      - '.github/workflows/holo-5os-tier3-shards.mts'
+    branches: [main]
+    paths: ['.github/workflows/holo-5os-tier3-shards.yml', '.github/workflows/holo-5os-tier3-shards.mts']
 
 permissions:
   contents: write
   id-token: write
   attestations: write
+
+env:
+  GH_TOKEN: ${{ github.token }}
 
 jobs:
   ensure-release:
@@ -34,25 +34,14 @@ jobs:
       versions_json: ${{ steps.resolve.outputs.versions_json }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            .github/workflows/
-
+        with: { sparse-checkout: .github/workflows/ }
       - uses: actions/setup-node@v7
-        with:
-          node-version: '26'
-
-      - name: Ensure GitHub Release & Resolve Tier-3 Upstream Versions
-        id: resolve
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release_tag || 'v11-max-5os-latest' }}
+        with: { node-version: '26' }
+      - id: resolve
+        env: { TAG: "${{ inputs.release_tag || 'v11-max-5os-latest' }}" }
         run: node .github/workflows/holo-5os-tier3-shards.mts resolve
-
       - uses: actions/upload-artifact@v7
-        with:
-          name: resolved-tier3-versions
-          path: resolved-tier3-versions.json
+        with: { name: resolved-tier3-versions, path: resolved-tier3-versions.json }
 
   build-tier3-5os-shard:
     needs: ensure-release
@@ -72,53 +61,32 @@ jobs:
           - libarchive
     steps:
       - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            .github/workflows/
-
+        with: { sparse-checkout: .github/workflows/ }
       - uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.14.0
-
+        with: { version: 0.14.0 }
       - uses: actions/cache@v6
         with:
           path: ~/.cache/zig
           key: ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-${{ hashFiles('.github/workflows/holo-5os-tier3-shards.yml', '.github/workflows/holo-5os-tier3-shards.mts') }}
-          restore-keys: |
-            ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-
-
+          restore-keys: ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-
       - uses: actions/setup-node@v7
-        with:
-          node-version: '26'
-
-      - name: Compile ${{ matrix.lib }} for 5 OS Targets via Pure Zig 0.14.0 + Smoke Test
-        id: build
+        with: { node-version: '26' }
+      - id: build
         env:
           LIB_KEY: ${{ matrix.lib }}
           VERSIONS_JSON: ${{ needs.ensure-release.outputs.versions_json }}
           RELEASE_TAG: ${{ needs.ensure-release.outputs.release_tag }}
           FORCE_REBUILD: ${{ inputs.force_rebuild == true && 'true' || 'false' }}
-          GH_TOKEN: ${{ github.token }}
         run: node .github/workflows/holo-5os-tier3-shards.mts build
-
       - uses: actions/upload-artifact@v7
         if: ${{ steps.build.outputs.skipped != 'true' }}
-        with:
-          name: tier3-sums-${{ matrix.lib }}
-          path: dist/SHA512SUMS-${{ matrix.lib }}.txt
-
-      - name: Upload Tier-3 5-OS Shard Binaries & Receipt to GitHub Release
+        with: { name: "tier3-sums-${{ matrix.lib }}", path: "dist/SHA512SUMS-${{ matrix.lib }}.txt" }
+      - if: ${{ steps.build.outputs.skipped != 'true' }}
+        env: { TAG: "${{ needs.ensure-release.outputs.release_tag }}" }
+        run: node .github/workflows/holo-workflow-runtime.mts upload
+      - uses: actions/attest-build-provenance@v4
         if: ${{ steps.build.outputs.skipped != 'true' }}
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.ensure-release.outputs.release_tag }}
-        run: gh release upload "$TAG" dist/* --repo awesome-os/upstream-mirrors --clobber
-
-      - name: Attest SLSA Build Provenance for ${{ matrix.lib }} Shard & Receipt
-        if: ${{ steps.build.outputs.skipped != 'true' }}
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: 'dist/*'
+        with: { subject-path: 'dist/*' }
 
   finalize-tier3-sums:
     needs: [ensure-release, build-tier3-5os-shard]
@@ -126,26 +94,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            .github/workflows/
-
+        with: { sparse-checkout: .github/workflows/ }
       - uses: actions/download-artifact@v8
-        with:
-          path: /tmp/artifacts
-
+        with: { path: /tmp/artifacts }
       - uses: actions/setup-node@v7
-        with:
-          node-version: '26'
-
-      - name: Summarize Tier-3 Shards & Upload Tier-3 SHA512SUMS
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.ensure-release.outputs.release_tag }}
+        with: { node-version: '26' }
+      - env: { TAG: "${{ needs.ensure-release.outputs.release_tag }}" }
         run: node .github/workflows/holo-5os-tier3-shards.mts finalize
-
-      - name: Attest SLSA Build Provenance for Tier-3 Checksums
+      - uses: actions/attest-build-provenance@v4
         if: ${{ hashFiles('/tmp/SHA512SUMS-tier3.txt') != '' }}
-        uses: actions/attest-build-provenance@v4
-        with:
-          subject-path: '/tmp/SHA512SUMS-tier3.txt'
+        with: { subject-path: '/tmp/SHA512SUMS-tier3.txt' }

@@ -579,8 +579,8 @@ typedef signed int INT32;
       throw new Error(`Unknown Tier-3 libKey: ${libKey}`);
   }
 
-  verifyAndSmokeTest({ libKey, libOut, dlLdLibraryPath });
-  emitSha512AndReceipt({ libKey, libOut, repo, tag, version });
+  const verifiedHeaders = verifyAndSmokeTest({ libKey, libOut, dlLdLibraryPath });
+  emitSha512AndReceipt({ libKey, libOut, repo, tag, version, kind: "runtime-library", verifiedHeaders });
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;

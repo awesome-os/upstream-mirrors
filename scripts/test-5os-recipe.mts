@@ -8,9 +8,15 @@ import { TIER2_LIBS } from "../.github/workflows/holo-5os-tier2-shards.mts";
 import { TIER3_LIBS } from "../.github/workflows/holo-5os-tier3-shards.mts";
 import { TIER4_LIBS } from "../.github/workflows/holo-5os-tier4-shards.mts";
 import { TIER5_LIBS } from "../.github/workflows/holo-5os-tier5-shards.mts";
+import { TIER6_KIND_MAP, TIER6_LIBS } from "../.github/workflows/holo-5os-tier6-shards.mts";
 import { LEGACY_5OS_ENGINES } from "../.github/workflows/holo-4os-shards.mts";
 import { SPARSE_MIRRORS } from "../.github/workflows/sync-sparse-mirrors.mts";
-import { detFlagsForTarget } from "../.github/workflows/holo-workflow-runtime.mts";
+import {
+  detFlagsForTarget,
+  type ShardKind,
+  type VerifiedHeaderInfo,
+  verifyBinaryMagic,
+} from "../.github/workflows/holo-workflow-runtime.mts";
 
 export const EXPECTED_TIER2_LIBS = [
   "mbedtls",
@@ -66,6 +72,22 @@ export const EXPECTED_TIER5_LIBS = [
   "meson",
 ] as const;
 
+export const EXPECTED_TIER6_LIBS = [
+  "protobuf",
+  "icu4c",
+  "vips",
+  "openblas",
+  "onednn",
+  "cmake",
+  "nccl",
+  "rocm",
+  "triton",
+  "flash-attention",
+  "xdna-driver",
+] as const;
+
+export const MAX_WORKFLOW_YML_LINES = 125;
+
 export const FIVE_OS_TARGETS = [
   { target: "x86_64-windows-gnu", ext: "win64.dll", kind: "shared" },
   { target: "x86_64-linux-gnu", ext: "linux-x64.so", kind: "linux-shared" },
@@ -87,12 +109,19 @@ export interface ShardReceipt {
   repo: string;
   tag: string;
   version: string;
+  kind?: ShardKind;
   deterministic: boolean;
+  verifiedHeaders?: {
+    passed: number;
+    total: number;
+    targets: VerifiedHeaderInfo[];
+  };
   artifacts: ShardReceiptArtifact[];
 }
 
 export interface WorkflowValidationResult {
   matrixLibs: string[];
+  lineCount: number;
   hasForceRebuildInput: boolean;
   hasZigCache: boolean;
   hasSkipFastPath: boolean;
@@ -110,7 +139,18 @@ export function validateShardReceipt(receipt: unknown): receipt is ShardReceipt 
   for (const key of ["pkg", "libOut", "repo", "tag", "version"] as const) {
     if (typeof r[key] !== "string" || (r[key] as string).length === 0) return false;
   }
+  if (r.kind !== undefined && r.kind !== "runtime-library" && r.kind !== "cli-tool" && r.kind !== "header-abi-probe") {
+    return false;
+  }
   if (r.deterministic !== true) return false;
+  if (r.verifiedHeaders !== undefined) {
+    if (!r.verifiedHeaders || typeof r.verifiedHeaders !== "object") return false;
+    const vh = r.verifiedHeaders as Record<string, unknown>;
+    if (typeof vh.passed !== "number" || typeof vh.total !== "number" || vh.passed !== vh.total || vh.total <= 0) {
+      return false;
+    }
+    if (!Array.isArray(vh.targets) || vh.targets.length !== vh.total) return false;
+  }
   if (!Array.isArray(r.artifacts) || r.artifacts.length === 0) return false;
   for (const art of r.artifacts) {
     if (!art || typeof art !== "object") return false;
@@ -140,6 +180,10 @@ function validateTierShardWorkflow(
   tierLabel: string
 ): WorkflowValidationResult {
   const yml = fs.readFileSync(workflowPath, "utf8");
+  const lineCount = yml.length === 0 ? 0 : yml.replace(/\r?\n$/, "").split(/\r?\n/).length;
+  if (lineCount > MAX_WORKFLOW_YML_LINES) {
+    throw new Error(`${tierLabel} workflow ${workflowRelPath} exceeds max ${MAX_WORKFLOW_YML_LINES} lines (got ${lineCount})`);
+  }
   const mtsRelPath = workflowRelPath.replace(/\.yml$/, ".mts");
   const mtsPath = workflowPath.replace(/\.yml$/, ".mts");
   if (!fs.existsSync(mtsPath)) {
@@ -212,10 +256,12 @@ function validateTierShardWorkflow(
   const hasReceiptEmission =
     runtime.includes("holo-v11.shard-receipt.v1") &&
     runtime.includes("`${opts.libOut}-receipt.json`") &&
-    yml.includes('gh release upload "$TAG" dist/* --repo awesome-os/upstream-mirrors --clobber') &&
+    runtime.includes("verifyBinaryMagic") &&
+    (yml.includes('gh release upload "$TAG" dist/* --repo awesome-os/upstream-mirrors --clobber') ||
+      yml.includes("node .github/workflows/holo-workflow-runtime.mts upload")) &&
     runtime.includes("WebAssembly.validate(buf)");
   if (!hasReceiptEmission) {
-    throw new Error(`${tierLabel} missing canonical per-shard receipt generation, release upload, or WebAssembly.validate`);
+    throw new Error(`${tierLabel} missing canonical per-shard receipt generation, release upload, verifyBinaryMagic, or WebAssembly.validate`);
   }
 
   const hasPerShardSlsa =
@@ -228,6 +274,7 @@ function validateTierShardWorkflow(
 
   return {
     matrixLibs,
+    lineCount,
     hasForceRebuildInput,
     hasZigCache,
     hasSkipFastPath,
@@ -300,12 +347,34 @@ export function validateTier5Workflow(workflowPath: string): WorkflowValidationR
   );
 }
 
+export function validateTier6Workflow(workflowPath: string): WorkflowValidationResult {
+  const res = validateTierShardWorkflow(
+    workflowPath,
+    EXPECTED_TIER6_LIBS,
+    TIER6_LIBS,
+    ".github/workflows/holo-5os-tier6-shards.yml",
+    "Tier-6"
+  );
+  for (const lib of EXPECTED_TIER6_LIBS) {
+    const kind = TIER6_KIND_MAP[lib];
+    if (!kind) throw new Error(`Missing TIER6_KIND_MAP entry for ${lib}`);
+  }
+  return res;
+}
+
 export function validateAllWorkflowPairs(workflowsDir: string): string[] {
   const ymls = fs
     .readdirSync(workflowsDir)
     .filter((f) => f.endsWith(".yml") && f !== "holo-ci.yml")
     .sort();
   const checked: string[] = [];
+  for (const ymlName of [...ymls, ...(fs.existsSync(path.join(workflowsDir, "holo-ci.yml")) ? ["holo-ci.yml"] : [])]) {
+    const ymlContent = fs.readFileSync(path.join(workflowsDir, ymlName), "utf8");
+    const lines = ymlContent.length === 0 ? 0 : ymlContent.replace(/\r?\n$/, "").split(/\r?\n/).length;
+    if (lines > MAX_WORKFLOW_YML_LINES) {
+      throw new Error(`Workflow ${ymlName} exceeds ${MAX_WORKFLOW_YML_LINES} lines (got ${lines})`);
+    }
+  }
   for (const ymlName of ymls) {
     const base = ymlName.replace(/\.yml$/, "");
     const mtsPath = path.join(workflowsDir, `${base}.mts`);
@@ -410,6 +479,7 @@ export function dryCompileC11FiveTargets(zigBin: string, libName = "holo_smoke")
   }
 
   artifacts.sort((a, b) => a.name.localeCompare(b.name));
+  const verifiedTargets = artifacts.map((a) => verifyBinaryMagic(path.join(distDir, a.name)));
 
   const receipt: ShardReceipt = {
     schema: "holo-v11.shard-receipt.v1",
@@ -418,7 +488,13 @@ export function dryCompileC11FiveTargets(zigBin: string, libName = "holo_smoke")
     repo: "awesome-os/upstream-mirrors",
     tag: "local-smoke",
     version: "1.0.0",
+    kind: "runtime-library",
     deterministic: true,
+    verifiedHeaders: {
+      passed: verifiedTargets.filter((t) => t.ok).length,
+      total: verifiedTargets.length,
+      targets: verifiedTargets,
+    },
     artifacts,
   };
 

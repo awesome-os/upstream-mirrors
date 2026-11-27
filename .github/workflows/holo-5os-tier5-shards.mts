@@ -640,8 +640,10 @@ int main(int argc, char **argv) {
 
   // Ensure deterministic compilation helper is referenced by TypeScript typecheck
   void detFlagsForTarget;
-  verifyAndSmokeTest({ libKey, libOut, dlLdLibraryPath, cliBinaries: ["meson"] });
-  emitSha512AndReceipt({ libKey, libOut, repo, tag, version });
+  const verifiedHeaders = verifyAndSmokeTest({ libKey, libOut, dlLdLibraryPath, cliBinaries: ["meson"] });
+  const probeSet = new Set(["vulkan-headers", "spirv-headers", "cccl", "cutlass"]);
+  const kind = libKey === "meson" ? "cli-tool" : probeSet.has(libKey) ? "header-abi-probe" : "runtime-library";
+  emitSha512AndReceipt({ libKey, libOut, repo, tag, version, kind, verifiedHeaders });
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;

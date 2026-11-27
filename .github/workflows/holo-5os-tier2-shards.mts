@@ -572,8 +572,8 @@ typedef int jmp_buf[1];
       throw new Error(`Unknown Tier-2 libKey: ${libKey}`);
   }
 
-  verifyAndSmokeTest({ libKey, libOut });
-  emitSha512AndReceipt({ libKey, libOut, repo, tag, version });
+  const verifiedHeaders = verifyAndSmokeTest({ libKey, libOut });
+  emitSha512AndReceipt({ libKey, libOut, repo, tag, version, kind: "runtime-library", verifiedHeaders });
 }
 
 const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;

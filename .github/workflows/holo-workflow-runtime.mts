@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+export type ShardKind = "runtime-library" | "cli-tool" | "header-abi-probe";
 
 export interface LibraryPin {
   pkg: string;
@@ -10,6 +13,14 @@ export interface LibraryPin {
   tag: string;
   version: string;
   url?: string;
+}
+
+export interface VerifiedHeaderInfo {
+  name: string;
+  ok: boolean;
+  format: string;
+  arch: string;
+  detail?: string;
 }
 
 export interface ShardReceiptArtifact {
@@ -25,7 +36,13 @@ export interface ShardReceipt {
   repo: string;
   tag: string;
   version: string;
+  kind: ShardKind;
   deterministic: boolean;
+  verifiedHeaders: {
+    passed: number;
+    total: number;
+    targets: VerifiedHeaderInfo[];
+  };
   artifacts: ShardReceiptArtifact[];
 }
 
@@ -387,15 +404,99 @@ export function checkSkipMaterialized(
   return false;
 }
 
+export function verifyBinaryMagic(filePath: string): VerifiedHeaderInfo {
+  const name = path.basename(filePath);
+  if (!fs.existsSync(filePath)) {
+    return { name, ok: false, format: "missing", arch: "unknown", detail: `File not found: ${filePath}` };
+  }
+  const buf = fs.readFileSync(filePath);
+  if (buf.length === 0) {
+    return { name, ok: false, format: "empty", arch: "unknown", detail: "Empty artifact" };
+  }
+
+  if (name.endsWith(".dll.a")) {
+    const ok = buf.length >= 8 && buf.subarray(0, 8).toString("ascii") === "!<arch>\n";
+    return { name, ok, format: "ar-implib", arch: "x86_64", ...(ok ? {} : { detail: "Invalid ar archive header" }) };
+  }
+
+  if (name.endsWith(".pyz")) {
+    const ok = buf.includes(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    return { name, ok, format: "pyz", arch: "noarch", ...(ok ? {} : { detail: "Missing PKZIP signature in .pyz" }) };
+  }
+
+  if (name.endsWith(".dll") || name.endsWith(".exe")) {
+    if (buf.length < 0x40 || buf.readUInt16LE(0) !== 0x5a4d) {
+      return { name, ok: false, format: "pe32+", arch: "unknown", detail: "Invalid MZ header" };
+    }
+    const peOff = buf.readUInt32LE(0x3c);
+    if (peOff + 6 > buf.length || buf[peOff] !== 0x50 || buf[peOff + 1] !== 0x45 || buf[peOff + 2] !== 0 || buf[peOff + 3] !== 0) {
+      return { name, ok: false, format: "pe32+", arch: "unknown", detail: "Invalid PE\\0\\0 signature" };
+    }
+    const machine = buf.readUInt16LE(peOff + 4);
+    if (machine !== 0x8664 && machine !== 0xaa64) {
+      return { name, ok: false, format: "pe32+", arch: `0x${machine.toString(16)}`, detail: `Unsupported PE machine 0x${machine.toString(16)}` };
+    }
+    return { name, ok: true, format: "pe32+", arch: machine === 0x8664 ? "x86_64" : "aarch64" };
+  }
+
+  if (name.endsWith(".so") || /-(linux-x64|linux-arm64)$/.test(name)) {
+    if (buf.length < 64 || buf[0] !== 0x7f || buf[1] !== 0x45 || buf[2] !== 0x4c || buf[3] !== 0x46) {
+      return { name, ok: false, format: "elf64", arch: "unknown", detail: "Invalid ELF magic" };
+    }
+    if (buf[4] !== 2) {
+      return { name, ok: false, format: "elf", arch: "unknown", detail: `Expected ELFCLASS64 (2), got ${buf[4]}` };
+    }
+    const eMachine = buf[5] === 2 ? buf.readUInt16BE(18) : buf.readUInt16LE(18);
+    if (eMachine !== 0x3e && eMachine !== 0xb7) {
+      return { name, ok: false, format: "elf64", arch: `0x${eMachine.toString(16)}`, detail: `Unsupported ELF e_machine 0x${eMachine.toString(16)}` };
+    }
+    return { name, ok: true, format: "elf64", arch: eMachine === 0x3e ? "x86_64" : "aarch64" };
+  }
+
+  if (name.endsWith(".dylib") || name.endsWith("-macos-arm64")) {
+    if (buf.length < 28) {
+      return { name, ok: false, format: "macho64", arch: "unknown", detail: "Truncated Mach-O header" };
+    }
+    const magicBe = buf.readUInt32BE(0);
+    if (magicBe !== 0xfeedfacf && magicBe !== 0xcffaedfe && magicBe !== 0xcafebabe && magicBe !== 0xbebafeca) {
+      return { name, ok: false, format: "macho64", arch: "unknown", detail: `Invalid Mach-O magic 0x${magicBe.toString(16)}` };
+    }
+    let arch = "arm64";
+    if (magicBe === 0xcafebabe || magicBe === 0xbebafeca) {
+      arch = "universal";
+    } else {
+      const cpu = magicBe === 0xcffaedfe ? buf.readUInt32LE(4) : buf.readUInt32BE(4);
+      if (cpu === 0x01000007) arch = "x86_64";
+    }
+    return { name, ok: true, format: "macho64", arch };
+  }
+
+  if (name.endsWith(".wasm")) {
+    if (buf.length < 8 || buf[0] !== 0x00 || buf[1] !== 0x61 || buf[2] !== 0x73 || buf[3] !== 0x6d) {
+      return { name, ok: false, format: "wasm32", arch: "wasm32-wasi", detail: "Invalid WASM magic header" };
+    }
+    if (!WebAssembly.validate(buf)) {
+      return { name, ok: false, format: "wasm32", arch: "wasm32-wasi", detail: "WebAssembly.validate failed" };
+    }
+    return { name, ok: true, format: "wasm32", arch: "wasm32-wasi" };
+  }
+
+  return { name, ok: false, format: "unknown", arch: "unknown", detail: `Unrecognized artifact extension: ${name}` };
+}
+
 export function verifyAndSmokeTest(opts: {
   libKey: string;
   libOut: string;
   dlLdLibraryPath?: string;
   cliBinaries?: readonly string[];
-}): void {
+  smokeProbe?: () => void;
+}): VerifiedHeaderInfo[] {
   console.log("=== Verifying produced binaries & runtime smoke tests ===");
   const distFiles = fs.readdirSync("dist").sort();
   const artifactPattern = /\.(dll|so|dylib|wasm|dll\.a|exe|pyz)$|-(linux-x64|linux-arm64|macos-arm64)$/;
+  const verifiedHeaders: VerifiedHeaderInfo[] = [];
+  const hasFileTool = Boolean(runCapture("which", ["file"], { ignoreError: true }).trim());
+
   for (const name of distFiles) {
     if (!artifactPattern.test(name)) continue;
     const full = path.join("dist", name);
@@ -403,7 +504,16 @@ export function verifyAndSmokeTest(opts: {
     if (stat.size <= 0) {
       throw new Error(`ERROR: empty artifact ${full}`);
     }
-    run("file", [full]);
+    const hdr = verifyBinaryMagic(full);
+    verifiedHeaders.push(hdr);
+    if (!hdr.ok) {
+      throw new Error(`Header verification failed for ${full}: ${hdr.detail ?? hdr.format}`);
+    }
+    console.log(`Header OK: ${name} (${hdr.format}, ${hdr.arch}, ${stat.size} bytes)`);
+    if (hasFileTool) run("file", [full]);
+  }
+  if (verifiedHeaders.length === 0) {
+    throw new Error(`ERROR: no verifiable artifacts produced in dist/ for ${opts.libKey}`);
   }
 
   const cliSet = new Set(opts.cliBinaries ?? []);
@@ -422,6 +532,10 @@ export function verifyAndSmokeTest(opts: {
       run(`./${linuxBin}`, ["--version"]);
     }
   } else {
+    const linuxSo = `dist/${opts.libOut}-linux-x64.so`;
+    if (!fs.existsSync(linuxSo)) {
+      throw new Error(`Missing expected Linux x64 shared library for dlopen smoke test: ${linuxSo}`);
+    }
     fs.writeFileSync(
       "/tmp/dlprobe.c",
       `#include <dlfcn.h>
@@ -447,22 +561,16 @@ int main(int argc, char **argv) {
     } else {
       run("zig", ["cc", "-target", "x86_64-linux-gnu", "-O2", "/tmp/dlprobe.c", "-ldl", "-lpthread", "-o", "/tmp/dlprobe"]);
     }
-    run("/tmp/dlprobe", [`dist/${opts.libOut}-linux-x64.so`], {
+    run("/tmp/dlprobe", [linuxSo], {
       env: { ...process.env, LD_LIBRARY_PATH: opts.dlLdLibraryPath ?? "" },
     });
   }
 
-  const wasmPath = `dist/${opts.libOut}-wasm32-wasi.wasm`;
-  if (fs.existsSync(wasmPath)) {
-    const buf = fs.readFileSync(wasmPath);
-    if (buf.length < 8 || buf[0] !== 0x00 || buf[1] !== 0x61 || buf[2] !== 0x73 || buf[3] !== 0x6d) {
-      throw new Error(`Invalid WASM magic header in ${wasmPath}`);
-    }
-    if (!WebAssembly.validate(buf)) {
-      throw new Error(`WebAssembly.validate failed in ${wasmPath}`);
-    }
-    console.log("WebAssembly.validate OK:", wasmPath, buf.length, "bytes");
+  if (opts.smokeProbe) {
+    opts.smokeProbe();
   }
+
+  return verifiedHeaders;
 }
 
 export function emitSha512AndReceipt(opts: {
@@ -471,12 +579,20 @@ export function emitSha512AndReceipt(opts: {
   repo: string;
   tag: string;
   version: string;
+  kind?: ShardKind;
+  verifiedHeaders?: VerifiedHeaderInfo[];
 }): void {
   const artifactPattern = /\.(dll|so|dylib|wasm|dll\.a|exe|pyz)$|-(linux-x64|linux-arm64|macos-arm64)$/;
   const files = fs
     .readdirSync("dist")
     .filter((f) => artifactPattern.test(f))
     .sort();
+
+  const targets = opts.verifiedHeaders ?? files.map((name) => verifyBinaryMagic(path.join("dist", name)));
+  const failed = targets.filter((t) => !t.ok);
+  if (targets.length === 0 || failed.length > 0) {
+    throw new Error(`Cannot emit receipt for ${opts.libKey}: ${failed.map((f) => `${f.name}:${f.detail}`).join("; ") || "no artifacts"}`);
+  }
 
   const sumLines: string[] = [];
   const artifacts: ShardReceiptArtifact[] = [];
@@ -496,7 +612,13 @@ export function emitSha512AndReceipt(opts: {
     repo: opts.repo,
     tag: opts.tag,
     version: opts.version,
+    kind: opts.kind ?? "runtime-library",
     deterministic: true,
+    verifiedHeaders: {
+      passed: targets.length,
+      total: targets.length,
+      targets,
+    },
     artifacts,
   };
   fs.writeFileSync(path.join("dist", `${opts.libOut}-receipt.json`), `${JSON.stringify(receipt, null, 2)}\n`, "utf8");
@@ -560,5 +682,31 @@ export function finalizeTierSumsPhase(opts: FinalizePhaseOptions): void {
 
   if (fs.existsSync(outPath) && fs.statSync(outPath).size > 0) {
     run("gh", ["release", "upload", tag, outPath, "--repo", GH_REPO, "--clobber"]);
+  }
+}
+
+export function uploadDistPhase(): void {
+  const tag = process.env.TAG || process.env.RELEASE_TAG || "v11-max-5os-latest";
+  if (!fs.existsSync("dist")) {
+    throw new Error("uploadDistPhase: dist/ directory not found");
+  }
+  const files = fs
+    .readdirSync("dist")
+    .filter((f) => fs.statSync(path.join("dist", f)).isFile())
+    .sort()
+    .map((f) => path.join("dist", f));
+  if (files.length === 0) {
+    throw new Error("uploadDistPhase: no files in dist/");
+  }
+  run("gh", ["release", "upload", tag, ...files, "--repo", GH_REPO, "--clobber"]);
+}
+
+const isMain = process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+if (isMain) {
+  const cmd = process.argv[2];
+  if (cmd === "upload") {
+    uploadDistPhase();
+  } else {
+    throw new Error(`Unknown runtime command: ${cmd ?? "(none)"}`);
   }
 }
