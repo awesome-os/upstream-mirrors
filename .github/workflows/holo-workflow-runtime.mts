@@ -246,12 +246,24 @@ export function makeCmakeWrappers(wrapDir: string, zigTarget: string): void {
 out=""
 prev=""
 for arg in "$@"; do
-  if [ "$prev" = "-o" ]; then out="$arg"; fi
+  if [ "$prev" = "-o" ] || [ "$prev" = "--output" ]; then
+    out="$arg"
+  fi
+  case "$arg" in
+    -o?*) out="\${arg#-o}" ;;
+    --output=*) out="\${arg#--output=}" ;;
+    -Fo?*) out="\${arg#-Fo}" ;;
+    /fo?*) out="\${arg#/fo}" ;;
+    *.obj|*.res) if [ -z "$out" ]; then out="$arg"; fi ;;
+  esac
   prev="$arg"
 done
-if [ -n "$out" ]; then
-  exec zig cc -target x86_64-windows-gnu -ffile-prefix-map=$PWD=. -x c -c /dev/null -o "$out"
+if [ -z "$out" ]; then
+  echo "windres wrapper: could not determine output file from args: $*" >&2
+  exit 1
 fi
+mkdir -p "$(dirname "$out")"
+exec zig cc -target x86_64-windows-gnu -ffile-prefix-map=$PWD=. -x c -c /dev/null -o "$out"
 `
   );
 }
@@ -422,6 +434,7 @@ int main(int argc, char **argv) {
     return 1;
   }
   printf("dlopen(%s) OK\\n", argv[1]);
+  fflush(stdout);
   dlclose(h);
   return 0;
 }

@@ -487,8 +487,8 @@ add_subdirectory(/tmp/re2_src re2_build)
         run("cmake", ["--build", b, "--target", "SPIRV-Tools-shared", `-j${nproc}`]);
         return `${b}/source`;
       };
-      copyIfFound(findFirstMatch(buildSpvt("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -s"), (n) => n.startsWith("libSPIRV-Tools-shared.so"), 2), `dist/${libOut}-linux-x64.so`);
-      copyIfFound(findFirstMatch(buildSpvt("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -s"), (n) => n.startsWith("libSPIRV-Tools-shared.so"), 2), `dist/${libOut}-linux-arm64.so`);
+      copyIfFound(findFirstMatch(buildSpvt("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -Wl,-z,nodelete -s"), (n) => n.startsWith("libSPIRV-Tools-shared.so"), 2), `dist/${libOut}-linux-x64.so`);
+      copyIfFound(findFirstMatch(buildSpvt("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -Wl,-z,nodelete -s"), (n) => n.startsWith("libSPIRV-Tools-shared.so"), 2), `dist/${libOut}-linux-arm64.so`);
       const bWin = buildSpvt("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-s");
       copyIfFound(findFirstMatch(bWin, (n) => n.includes("SPIRV-Tools-shared") && n.endsWith(".dll"), 2), `dist/${libOut}-win64.dll`);
       const imp = findFirstMatch(bWin, (n) => n.includes("SPIRV-Tools-shared") && n.endsWith(".dll.a"), 2);
@@ -520,8 +520,8 @@ add_subdirectory(/tmp/re2_src re2_build)
         run("cmake", ["--build", b, "--target", "glslang", `-j${nproc}`]);
         return b;
       };
-      copyIfFound(findFirstMatch(buildGlsl("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -s"), (n) => n.startsWith("libglslang.so")), `dist/${libOut}-linux-x64.so`);
-      copyIfFound(findFirstMatch(buildGlsl("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -s"), (n) => n.startsWith("libglslang.so")), `dist/${libOut}-linux-arm64.so`);
+      copyIfFound(findFirstMatch(buildGlsl("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "-lpthread -Wl,-z,nodelete -s"), (n) => n.startsWith("libglslang.so")), `dist/${libOut}-linux-x64.so`);
+      copyIfFound(findFirstMatch(buildGlsl("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "-lpthread -Wl,-z,nodelete -s"), (n) => n.startsWith("libglslang.so")), `dist/${libOut}-linux-arm64.so`);
       const bWin = buildGlsl("win64", "Windows", "AMD64", "x86_64-windows-gnu", "-s");
       copyIfFound(findFirstMatch(bWin, (n) => n.includes("glslang") && n.endsWith(".dll")), `dist/${libOut}-win64.dll`);
       const imp = findFirstMatch(bWin, (n) => n.includes("glslang") && n.endsWith(".dll.a"));
