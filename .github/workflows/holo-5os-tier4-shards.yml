@@ -164,18 +164,19 @@ jobs:
           echo "lib_out=${LIB_OUT}" >> "$GITHUB_OUTPUT"
 
           if [ "${FORCE_REBUILD}" != "true" ]; then
-            ASSETS_JSON=$(gh release view "$RELEASE_TAG" --repo awesome-os/upstream-mirrors --json assets 2>/dev/null || echo '{"assets":[]}')
+            mkdir -p /tmp/skip-check
+            gh release view "$RELEASE_TAG" --repo awesome-os/upstream-mirrors --json assets > /tmp/skip-check/assets.json 2>/dev/null || echo '{"assets":[]}' > /tmp/skip-check/assets.json
             RECEIPT_NAME="${LIB_OUT}-receipt.json"
             if node -e '
-              const assets = JSON.parse(process.argv[1]).assets || [];
+              const fs = require("node:fs");
+              const assets = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).assets || [];
               process.exit(assets.some(a => a.name === process.argv[2]) ? 0 : 1);
-            ' "$ASSETS_JSON" "$RECEIPT_NAME"; then
-              mkdir -p /tmp/skip-check
+            ' /tmp/skip-check/assets.json "$RECEIPT_NAME"; then
               if gh release download "$RELEASE_TAG" --repo awesome-os/upstream-mirrors -p "$RECEIPT_NAME" -D /tmp/skip-check --clobber >/dev/null 2>&1; then
                 if node -e '
                   const fs = require("node:fs");
                   const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-                  const assets = new Set((JSON.parse(process.argv[2]).assets || []).map(a => a.name));
+                  const assets = new Set((JSON.parse(fs.readFileSync(process.argv[2], "utf8")).assets || []).map(a => a.name));
                   const upVer = process.argv[3];
                   const ok = receipt &&
                     receipt.version === upVer &&
@@ -183,7 +184,7 @@ jobs:
                     receipt.artifacts.length > 0 &&
                     receipt.artifacts.every(a => a && typeof a.name === "string" && assets.has(a.name));
                   process.exit(ok ? 0 : 1);
-                ' "/tmp/skip-check/${RECEIPT_NAME}" "$ASSETS_JSON" "$UP_VER"; then
+                ' "/tmp/skip-check/${RECEIPT_NAME}" /tmp/skip-check/assets.json "$UP_VER"; then
                   echo "skipped=true" >> "$GITHUB_OUTPUT"
                   echo "SKIP: ${LIB_KEY} ${UP_VER} already materialized"
                   exit 0
@@ -499,7 +500,7 @@ jobs:
           }
           EOF
               MDB_CORE="src/plugins/auth/my_auth.c src/plugins/auth/old_password.c src/plugins/pvio/pvio_socket.c src/libmariadb/ma_array.c src/libmariadb/ma_charset.c src/libmariadb/ma_decimal.c src/libmariadb/ma_hashtbl.c src/libmariadb/ma_net.c src/libmariadb/mariadb_charset.c src/libmariadb/ma_time.c src/libmariadb/ma_default.c src/libmariadb/ma_errmsg.c src/libmariadb/mariadb_lib.c src/libmariadb/ma_list.c src/libmariadb/ma_pvio.c src/libmariadb/ma_tls.c src/libmariadb/ma_alloc.c src/libmariadb/ma_compress.c src/libmariadb/ma_init.c src/libmariadb/ma_password.c src/libmariadb/ma_ll2str.c src/libmariadb/mariadb_stmt.c src/libmariadb/ma_loaddata.c src/libmariadb/ma_stmt_codec.c src/libmariadb/ma_string.c src/libmariadb/ma_dtoa.c src/libmariadb/mariadb_rpl.c /tmp/mdb_gen/ma_client_plugin.c src/libmariadb/ma_io.c src/libmariadb/get_password.c src/libmariadb/mariadb_dyncol.c src/libmariadb/mariadb_async.c src/libmariadb/ma_context.c"
-              ZLIB_SRCS=$(find /tmp/zlib_src -maxdepth 1 -name '*.c' ! -name 'example.c' ! -name 'minigzip.c' | sort)
+              ZLIB_SRCS=$(find /tmp/zlib_src -maxdepth 1 -name '*.c' ! -name 'example.c' ! -name 'minigzip.c' ! -name 'gz*.c' | sort)
               MDB_FLAGS="-Wno-incompatible-function-pointer-types -DLIBMARIADB -DTHREAD -DHAVE_CONFIG_H -DHAVE_COMPRESS -Isrc/include -Isrc/libmariadb -I/tmp/zlib_src"
               zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $DET_FLAGS $MDB_FLAGS -DWIN32 -DHAVE_WINCRYPT -D_WIN32_WINNT=0x0601 "-Dreset_tls_error(m)=((void)(m))" -include /tmp/mdb_win/ma_tls_win_pre.h -I/tmp/mdb_win -Isrc/win-iconv $MDB_CORE src/libmariadb/win32_errmsg.c src/win-iconv/win_iconv.c src/libmariadb/secure/win_crypt.c /tmp/mdb_gen/ma_tls_win_stub.c $ZLIB_SRCS -lws2_32 -ladvapi32 -lshlwapi -lcrypt32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $MDB_FLAGS "-Dreset_tls_error(m)=((void)(m))" -include /tmp/mdb_posix/ma_crypt_pre.h -I/tmp/mdb_posix $MDB_CORE /tmp/mdb_gen/ma_crypt_stub.c $ZLIB_SRCS -lpthread -ldl -lm -o "dist/${LIB_OUT}-linux-x64.so"
@@ -798,11 +799,11 @@ jobs:
                 local cfg_target="$1"
                 local zig_target="$2"
                 local bdir="/tmp/ssl_${cfg_target}"
-                rm -rf "$bdir" && mkdir -p "$bdir"
+                rm -rf "$bdir" && cp -a "$SSL_SRC" "$bdir"
                 (
                   cd "$bdir"
                   AR="zig ar" RANLIB="zig ranlib" CC="zig cc -target ${zig_target} -fPIC" \
-                    "$SSL_SRC/Configure" "$cfg_target" no-asm no-tests no-apps no-docs no-shared -DOPENSSL_NO_SECURE_MEMORY >/dev/null
+                    ./Configure "$cfg_target" no-asm no-tests no-apps no-docs no-shared -DOPENSSL_NO_SECURE_MEMORY >/dev/null
                   make -j"$(nproc)" build_libs >/dev/null
                 )
               }
