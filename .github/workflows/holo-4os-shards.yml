@@ -38,7 +38,7 @@ jobs:
 
       - name: Checkout Sparse Mirror Branch (if mirror-backed)
         if: matrix.engine != 'sqlite3'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: mirror/${{ matrix.engine }}
           path: src

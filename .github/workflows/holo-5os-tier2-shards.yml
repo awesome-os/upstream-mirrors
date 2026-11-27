@@ -128,7 +128,7 @@ jobs:
           - onig
           - zlib-ng
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: |
             .github/workflows/holo-5os-tier2-shards.yml
