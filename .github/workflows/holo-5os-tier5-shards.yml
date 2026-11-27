@@ -384,10 +384,10 @@ jobs:
           #define HAVE_SIGACTION 0
           #define HAVE_SYS_TYPES_H 1
           #ifdef _WIN32
+          #ifndef _WIN32_WINNT
           #define _WIN32_WINNT 0x0601
+          #endif
           #define _FILE_OFFSET_BITS 64
-          #define fseeko _fseeki64
-          #define ftello _ftelli64
           #define HAVE_CLOCK_GETTIME 0
           #define HAVE_POSIX_MEMALIGN 0
           #define HAVE_MEMALIGN 0
@@ -526,7 +526,7 @@ jobs:
               RDK_PB="src/src/nanopb/pb_encode.c src/src/nanopb/pb_decode.c src/src/nanopb/pb_common.c src/src/opentelemetry/metrics.pb.c src/src/opentelemetry/common.pb.c src/src/opentelemetry/resource.pb.c"
               RDK_INC="-Isrc/src -Isrc/src/nanopb -Wno-incompatible-pointer-types"
               RDK_WIN_FLAGS="-DWITHOUT_WIN32_CONFIG -DLIBRDKAFKA_EXPORTS -DWITH_SNAPPY=1 -DWITH_SOCKEM=1 -DWITH_SASL=1 -DENABLE_DEVEL=0 -DWITH_LIBDL=0 -DWITH_PLUGINS=0 -DWITH_SSL=0 -DWITH_ZLIB=0 -DWITH_ZSTD=0 -DWITH_CURL=0 -DWITH_HDRHISTOGRAM=0 -DWITH_LZ4_EXT=0 -DWITH_SASL_SCRAM=0 -DWITH_SASL_OAUTHBEARER=0 -DWITH_OAUTHBEARER_OIDC=0 -DHAVE_REGEX=0 -DWITH_C11THREADS=0 -DWITH_CRC32C_HW=0"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $RDK_WIN_FLAGS $RDK_INC $RDK_CORE src/src/regexp.c $RDK_PB -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $RDK_WIN_FLAGS $RDK_INC $RDK_CORE src/src/regexp.c src/src/rdkafka_sasl_win32.c $RDK_PB -lws2_32 -liphlpapi -lcrypt32 -lsecur32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $RDK_INC $RDK_CORE $RDK_PB -lpthread -lm -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $RDK_INC $RDK_CORE $RDK_PB -lpthread -lm -o "dist/${LIB_OUT}-linux-arm64.so"
               zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $RDK_INC $RDK_CORE $RDK_PB -lpthread -lm -o "dist/${LIB_OUT}-macos-arm64.dylib"
@@ -534,26 +534,29 @@ jobs:
 
             libsdl3)
               clone_tag
-              SDL_CMAKE_OPTS="-G Ninja -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_VIDEO=ON -DSDL_DUMMYVIDEO=ON -DSDL_OFFSCREEN=ON -DSDL_AUDIO=ON -DSDL_DUMMYAUDIO=ON -DSDL_DISKAUDIO=ON -DSDL_RENDER=ON -DSDL_UNIX_CONSOLE_BUILD=OFF -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF -DSDL_OPENGL=OFF -DSDL_OPENGLES=OFF -DSDL_VULKAN=OFF -DSDL_DIRECTX=OFF -DSDL_WASAPI=OFF -DSDL_XINPUT=OFF -DSDL_RENDER_D3D=OFF -DSDL_RENDER_D3D11=OFF -DSDL_RENDER_D3D12=OFF -DSDL_RENDER_VULKAN=OFF -DSDL_RENDER_GPU=OFF -DSDL_GPU=OFF -DSDL_HIDAPI=OFF -DSDL_JOYSTICK=OFF -DSDL_HAPTIC=OFF -DSDL_CAMERA=OFF -DSDL_SENSOR=OFF -DSDL_DIALOG=OFF -DSDL_TRAY=OFF -DSDL_ALSA=OFF -DSDL_PULSEAUDIO=OFF -DSDL_PIPEWIRE=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF -DSDL_OSS=OFF -DSDL_DBUS=OFF -DSDL_IBUS=OFF -DSDL_LIBUDEV=OFF"
+              SDL_CMAKE_OPTS="-G Ninja -DCMAKE_BUILD_TYPE=Release -DSDL_SHARED=ON -DSDL_STATIC=OFF -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF -DSDL_VIDEO=ON -DSDL_DUMMYVIDEO=ON -DSDL_OFFSCREEN=ON -DSDL_AUDIO=ON -DSDL_DUMMYAUDIO=ON -DSDL_DISKAUDIO=ON -DSDL_RENDER=ON -DSDL_UNIX_CONSOLE_BUILD=ON -DSDL_X11=OFF -DSDL_WAYLAND=OFF -DSDL_KMSDRM=OFF -DSDL_OPENGL=OFF -DSDL_OPENGLES=OFF -DSDL_VULKAN=OFF -DSDL_DIRECTX=OFF -DSDL_WASAPI=OFF -DSDL_XINPUT=OFF -DSDL_RENDER_D3D=OFF -DSDL_RENDER_D3D11=OFF -DSDL_RENDER_D3D12=OFF -DSDL_RENDER_VULKAN=OFF -DSDL_RENDER_GPU=OFF -DSDL_GPU=OFF -DSDL_HIDAPI=OFF -DSDL_JOYSTICK=OFF -DSDL_HAPTIC=OFF -DSDL_CAMERA=OFF -DSDL_SENSOR=OFF -DSDL_DIALOG=OFF -DSDL_TRAY=OFF -DSDL_ALSA=OFF -DSDL_PULSEAUDIO=OFF -DSDL_PIPEWIRE=OFF -DSDL_JACK=OFF -DSDL_SNDIO=OFF -DSDL_OSS=OFF -DSDL_DBUS=OFF -DSDL_IBUS=OFF -DSDL_LIBUDEV=OFF"
 
               make_cmake_wrappers /tmp/sdl_lin_x64 "x86_64-linux-gnu" "$DET_LINUX_FLAGS"
               cmake -S src -B /tmp/sdl_b_lin_x64 $SDL_CMAKE_OPTS \
                 -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=x86_64 \
-                -DCMAKE_C_COMPILER=/tmp/sdl_lin_x64/cc -DCMAKE_AR=/tmp/sdl_lin_x64/ar -DCMAKE_RANLIB=/tmp/sdl_lin_x64/ranlib
+                -DCMAKE_C_COMPILER=/tmp/sdl_lin_x64/cc -DCMAKE_AR=/tmp/sdl_lin_x64/ar -DCMAKE_RANLIB=/tmp/sdl_lin_x64/ranlib \
+                -DCMAKE_SHARED_LINKER_FLAGS="-lpthread -s"
               cmake --build /tmp/sdl_b_lin_x64 -j"$(nproc)"
               cp -L "$(find /tmp/sdl_b_lin_x64 -maxdepth 2 -name 'libSDL3.so*' ! -name '*.dbg' | sort | head -n 1)" "dist/${LIB_OUT}-linux-x64.so"
 
               make_cmake_wrappers /tmp/sdl_lin_arm64 "aarch64-linux-gnu" "$DET_LINUX_FLAGS"
               cmake -S src -B /tmp/sdl_b_lin_arm64 $SDL_CMAKE_OPTS \
                 -DCMAKE_SYSTEM_NAME=Linux -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-                -DCMAKE_C_COMPILER=/tmp/sdl_lin_arm64/cc -DCMAKE_AR=/tmp/sdl_lin_arm64/ar -DCMAKE_RANLIB=/tmp/sdl_lin_arm64/ranlib
+                -DCMAKE_C_COMPILER=/tmp/sdl_lin_arm64/cc -DCMAKE_AR=/tmp/sdl_lin_arm64/ar -DCMAKE_RANLIB=/tmp/sdl_lin_arm64/ranlib \
+                -DCMAKE_SHARED_LINKER_FLAGS="-lpthread -s"
               cmake --build /tmp/sdl_b_lin_arm64 -j"$(nproc)"
               cp -L "$(find /tmp/sdl_b_lin_arm64 -maxdepth 2 -name 'libSDL3.so*' ! -name '*.dbg' | sort | head -n 1)" "dist/${LIB_OUT}-linux-arm64.so"
 
               make_cmake_wrappers /tmp/sdl_win64 "x86_64-windows-gnu" "$DET_FLAGS"
               cmake -S src -B /tmp/sdl_b_win64 $SDL_CMAKE_OPTS \
                 -DCMAKE_SYSTEM_NAME=Windows -DCMAKE_SYSTEM_PROCESSOR=AMD64 \
-                -DCMAKE_C_COMPILER=/tmp/sdl_win64/cc -DCMAKE_AR=/tmp/sdl_win64/ar -DCMAKE_RANLIB=/tmp/sdl_win64/ranlib -DCMAKE_RC_COMPILER=/tmp/sdl_win64/windres
+                -DCMAKE_C_COMPILER=/tmp/sdl_win64/cc -DCMAKE_AR=/tmp/sdl_win64/ar -DCMAKE_RANLIB=/tmp/sdl_win64/ranlib -DCMAKE_RC_COMPILER=/tmp/sdl_win64/windres \
+                -DCMAKE_SHARED_LINKER_FLAGS="-s"
               cmake --build /tmp/sdl_b_win64 -j"$(nproc)"
               cp -L "$(find /tmp/sdl_b_win64 -maxdepth 2 -name '*SDL3*.dll' | head -n 1)" "dist/${LIB_OUT}-win64.dll"
               implib=$(find /tmp/sdl_b_win64 -maxdepth 2 -name '*SDL3*.dll.a' | head -n 1 || true)
@@ -562,12 +565,11 @@ jobs:
 
             re2)
               git clone --depth=1 --branch "$UP_TAG" "https://github.com/google/re2.git" /tmp/re2_src
-              git clone --depth=1 --branch "20250812.1" "https://github.com/abseil/abseil-cpp.git" /tmp/absl_src || \
-                git clone --depth=1 "https://github.com/abseil/abseil-cpp.git" /tmp/absl_src
+              git clone --depth=1 "https://github.com/abseil/abseil-cpp.git" /tmp/absl_src
               mkdir -p /tmp/re2_bundle
               cat > /tmp/re2_bundle/CMakeLists.txt <<'EOF'
           cmake_minimum_required(VERSION 3.22)
-          project(re2_bundle CXX)
+          project(re2_bundle C CXX)
           set(CMAKE_CXX_STANDARD 17)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)
           set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -579,6 +581,7 @@ jobs:
           set(BUILD_SHARED_LIBS ON)
           set(RE2_BUILD_TESTING OFF CACHE BOOL "" FORCE)
           set(RE2_USE_ICU OFF CACHE BOOL "" FORCE)
+          set(RE2_INSTALL OFF CACHE BOOL "" FORCE)
           add_subdirectory(/tmp/re2_src re2_build)
           EOF
               build_re2_arch() {
@@ -587,19 +590,21 @@ jobs:
                 local proc="$3"
                 local zig_t="$4"
                 local det="$5"
+                local sh_ld="$6"
                 make_cmake_wrappers "/tmp/re2_w_${arch}" "$zig_t" "$det"
                 cmake -S /tmp/re2_bundle -B "/tmp/re2_b_${arch}" -G Ninja -DCMAKE_BUILD_TYPE=Release \
                   -DCMAKE_SYSTEM_NAME="$sys" -DCMAKE_SYSTEM_PROCESSOR="$proc" \
                   -DCMAKE_C_COMPILER="/tmp/re2_w_${arch}/cc" -DCMAKE_CXX_COMPILER="/tmp/re2_w_${arch}/cxx" \
                   -DCMAKE_AR="/tmp/re2_w_${arch}/ar" -DCMAKE_RANLIB="/tmp/re2_w_${arch}/ranlib" \
+                  -DCMAKE_SHARED_LINKER_FLAGS="$sh_ld" \
                   -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
                 cmake --build "/tmp/re2_b_${arch}" --target re2 -j"$(nproc)"
               }
-              build_re2_arch "lin_x64"   "Linux"   "x86_64"  "x86_64-linux-gnu"   "$DET_LINUX_FLAGS"
+              build_re2_arch "lin_x64"   "Linux"   "x86_64"  "x86_64-linux-gnu"   "$DET_LINUX_FLAGS" "-lpthread -s"
               cp -L "$(find /tmp/re2_b_lin_x64/re2_build -maxdepth 2 -name 'libre2.so*' | sort | head -n 1)" "dist/${LIB_OUT}-linux-x64.so"
-              build_re2_arch "lin_arm64" "Linux"   "aarch64" "aarch64-linux-gnu"  "$DET_LINUX_FLAGS"
+              build_re2_arch "lin_arm64" "Linux"   "aarch64" "aarch64-linux-gnu"  "$DET_LINUX_FLAGS" "-lpthread -s"
               cp -L "$(find /tmp/re2_b_lin_arm64/re2_build -maxdepth 2 -name 'libre2.so*' | sort | head -n 1)" "dist/${LIB_OUT}-linux-arm64.so"
-              build_re2_arch "win64"     "Windows" "AMD64"   "x86_64-windows-gnu" "$DET_FLAGS"
+              build_re2_arch "win64"     "Windows" "AMD64"   "x86_64-windows-gnu" "$DET_FLAGS"       "-s"
               cp -L "$(find /tmp/re2_b_win64/re2_build -maxdepth 2 -name '*re2*.dll' | head -n 1)" "dist/${LIB_OUT}-win64.dll"
               implib=$(find /tmp/re2_b_win64/re2_build -maxdepth 2 -name '*re2*.dll.a' | head -n 1 || true)
               if [ -n "$implib" ]; then cp -L "$implib" "dist/${LIB_OUT}-win64.dll.a"; fi
@@ -617,18 +622,20 @@ jobs:
                 local proc="$3"
                 local zig_t="$4"
                 local det="$5"
+                local sh_ld="$6"
                 make_cmake_wrappers "/tmp/spvt_w_${arch}" "$zig_t" "$det"
                 cmake -S src -B "/tmp/spvt_b_${arch}" $SPV_CMAKE_OPTS \
                   -DCMAKE_SYSTEM_NAME="$sys" -DCMAKE_SYSTEM_PROCESSOR="$proc" \
                   -DCMAKE_C_COMPILER="/tmp/spvt_w_${arch}/cc" -DCMAKE_CXX_COMPILER="/tmp/spvt_w_${arch}/cxx" \
-                  -DCMAKE_AR="/tmp/spvt_w_${arch}/ar" -DCMAKE_RANLIB="/tmp/spvt_w_${arch}/ranlib"
+                  -DCMAKE_AR="/tmp/spvt_w_${arch}/ar" -DCMAKE_RANLIB="/tmp/spvt_w_${arch}/ranlib" \
+                  -DCMAKE_SHARED_LINKER_FLAGS="$sh_ld"
                 cmake --build "/tmp/spvt_b_${arch}" --target SPIRV-Tools-shared -j"$(nproc)"
               }
-              build_spvt_arch "lin_x64"   "Linux"   "x86_64"  "x86_64-linux-gnu"   "$DET_LINUX_FLAGS"
+              build_spvt_arch "lin_x64"   "Linux"   "x86_64"  "x86_64-linux-gnu"   "$DET_LINUX_FLAGS" "-lpthread -s"
               cp -L "$(find /tmp/spvt_b_lin_x64/source -maxdepth 2 -name 'libSPIRV-Tools-shared.so*' | sort | head -n 1)" "dist/${LIB_OUT}-linux-x64.so"
-              build_spvt_arch "lin_arm64" "Linux"   "aarch64" "aarch64-linux-gnu"  "$DET_LINUX_FLAGS"
+              build_spvt_arch "lin_arm64" "Linux"   "aarch64" "aarch64-linux-gnu"  "$DET_LINUX_FLAGS" "-lpthread -s"
               cp -L "$(find /tmp/spvt_b_lin_arm64/source -maxdepth 2 -name 'libSPIRV-Tools-shared.so*' | sort | head -n 1)" "dist/${LIB_OUT}-linux-arm64.so"
-              build_spvt_arch "win64"     "Windows" "AMD64"   "x86_64-windows-gnu" "$DET_FLAGS"
+              build_spvt_arch "win64"     "Windows" "AMD64"   "x86_64-windows-gnu" "$DET_FLAGS"       "-s"
               cp -L "$(find /tmp/spvt_b_win64/source -maxdepth 2 -name '*SPIRV-Tools-shared*.dll' | head -n 1)" "dist/${LIB_OUT}-win64.dll"
               implib=$(find /tmp/spvt_b_win64/source -maxdepth 2 -name '*SPIRV-Tools-shared*.dll.a' | head -n 1 || true)
               if [ -n "$implib" ]; then cp -L "$implib" "dist/${LIB_OUT}-win64.dll.a"; fi
@@ -636,7 +643,7 @@ jobs:
 
             glslang)
               clone_tag
-              GLSL_CMAKE_OPTS="-G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF -DENABLE_OPT=OFF -DENABLE_GLSLANG_BINARIES=OFF -DBUILD_SHARED_LIBS=ON -DENABLE_PCH=OFF"
+              GLSL_CMAKE_OPTS="-G Ninja -DCMAKE_BUILD_TYPE=Release -DGLSLANG_TESTS=OFF -DBUILD_TESTING=OFF -DENABLE_OPT=OFF -DENABLE_GLSLANG_BINARIES=OFF -DBUILD_SHARED_LIBS=ON -DENABLE_PCH=OFF"
 
               build_glsl_arch() {
                 local arch="$1"
@@ -644,20 +651,22 @@ jobs:
                 local proc="$3"
                 local zig_t="$4"
                 local det="$5"
+                local sh_ld="$6"
                 make_cmake_wrappers "/tmp/glsl_w_${arch}" "$zig_t" "$det"
                 cmake -S src -B "/tmp/glsl_b_${arch}" $GLSL_CMAKE_OPTS \
                   -DCMAKE_SYSTEM_NAME="$sys" -DCMAKE_SYSTEM_PROCESSOR="$proc" \
                   -DCMAKE_C_COMPILER="/tmp/glsl_w_${arch}/cc" -DCMAKE_CXX_COMPILER="/tmp/glsl_w_${arch}/cxx" \
                   -DCMAKE_AR="/tmp/glsl_w_${arch}/ar" -DCMAKE_RANLIB="/tmp/glsl_w_${arch}/ranlib" \
+                  -DCMAKE_SHARED_LINKER_FLAGS="$sh_ld" \
                   -DCMAKE_INSTALL_RPATH='$ORIGIN' -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
                   -DCMAKE_WINDOWS_EXPORT_ALL_SYMBOLS=ON
-                cmake --build "/tmp/glsl_b_${arch}" -j"$(nproc)"
+                cmake --build "/tmp/glsl_b_${arch}" --target glslang -j"$(nproc)"
               }
-              build_glsl_arch "lin_x64"   "Linux"   "x86_64"  "x86_64-linux-gnu"   "$DET_LINUX_FLAGS"
+              build_glsl_arch "lin_x64"   "Linux"   "x86_64"  "x86_64-linux-gnu"   "$DET_LINUX_FLAGS" "-lpthread -s"
               cp -L "$(find /tmp/glsl_b_lin_x64 -name 'libglslang.so*' | sort | head -n 1)" "dist/${LIB_OUT}-linux-x64.so"
-              build_glsl_arch "lin_arm64" "Linux"   "aarch64" "aarch64-linux-gnu"  "$DET_LINUX_FLAGS"
+              build_glsl_arch "lin_arm64" "Linux"   "aarch64" "aarch64-linux-gnu"  "$DET_LINUX_FLAGS" "-lpthread -s"
               cp -L "$(find /tmp/glsl_b_lin_arm64 -name 'libglslang.so*' | sort | head -n 1)" "dist/${LIB_OUT}-linux-arm64.so"
-              build_glsl_arch "win64"     "Windows" "AMD64"   "x86_64-windows-gnu" "$DET_FLAGS"
+              build_glsl_arch "win64"     "Windows" "AMD64"   "x86_64-windows-gnu" "$DET_FLAGS"       "-s"
               cp -L "$(find /tmp/glsl_b_win64 -name '*glslang*.dll' | head -n 1)" "dist/${LIB_OUT}-win64.dll"
               implib=$(find /tmp/glsl_b_win64 -name '*glslang*.dll.a' | head -n 1 || true)
               if [ -n "$implib" ]; then cp -L "$implib" "dist/${LIB_OUT}-win64.dll.a"; fi
@@ -670,37 +679,40 @@ jobs:
                 local arch="$1"
                 local os_name="$2"
                 local zig_t="$3"
-                local det="$4"
+                local ld_det="$4"
                 local bdir="/tmp/ff_b_${arch}_${os_name}"
                 rm -rf "$bdir" && mkdir -p "$bdir"
                 (
                   cd "$bdir"
                   "$FF_SRC/configure" \
                     --enable-cross-compile --arch="$arch" --target-os="$os_name" \
-                    --cc="zig cc -target ${zig_t} ${det}" \
-                    --cxx="zig c++ -target ${zig_t} ${det}" \
-                    --ld="zig cc -target ${zig_t} ${det}" \
-                    --ar="zig ar" --ranlib="zig ranlib" --nm="zig nm" \
+                    --cc="zig cc -target ${zig_t} ${DET_FLAGS}" \
+                    --cxx="zig c++ -target ${zig_t} ${DET_FLAGS}" \
+                    --ld="zig cc -target ${zig_t} ${DET_FLAGS}" \
+                    --ar="zig ar" --ranlib="zig ranlib" \
                     --disable-stripping \
                     --disable-all --disable-asm --disable-autodetect \
                     --disable-programs --disable-doc \
                     --enable-avutil --enable-avcodec --enable-avformat --enable-swscale \
                     --enable-shared --disable-static \
-                    --extra-ldflags="-Wl,-rpath,\$ORIGIN" >/dev/null
+                    --extra-ldflags="-Wl,-rpath,\$ORIGIN ${ld_det}" >/dev/null
+                  if [ "$os_name" = "linux" ] && [ -f config.h ]; then
+                    sed -i 's/^#define HAVE_SYSCTL 1$/#define HAVE_SYSCTL 0/' config.h
+                  fi
                   make -j"$(nproc)" >/dev/null
                 )
               }
-              build_ff_arch "x86_64" "linux" "x86_64-linux-gnu" "$DET_LINUX_FLAGS"
+              build_ff_arch "x86_64" "linux" "x86_64-linux-gnu" "-Wl,--build-id=none"
               for lib in libavutil libavcodec libavformat libswscale; do
                 cp -L "$(find /tmp/ff_b_x86_64_linux -name "${lib}.so*" | sort | head -n 1)" "dist/${lib}-linux-x64.so"
               done
 
-              build_ff_arch "aarch64" "linux" "aarch64-linux-gnu" "$DET_LINUX_FLAGS"
+              build_ff_arch "aarch64" "linux" "aarch64-linux-gnu" "-Wl,--build-id=none"
               for lib in libavutil libavcodec libavformat libswscale; do
                 cp -L "$(find /tmp/ff_b_aarch64_linux -name "${lib}.so*" | sort | head -n 1)" "dist/${lib}-linux-arm64.so"
               done
 
-              build_ff_arch "x86_64" "mingw32" "x86_64-windows-gnu" "$DET_FLAGS"
+              build_ff_arch "x86_64" "mingw32" "x86_64-windows-gnu" ""
               for lib in avutil avcodec avformat swscale; do
                 dll_f=$(find /tmp/ff_b_x86_64_mingw32 -name "${lib}-*.dll" | head -n 1 || true)
                 if [ -n "$dll_f" ]; then cp -L "$dll_f" "dist/lib${lib}-win64.dll"; fi
@@ -789,7 +801,7 @@ jobs:
             return 0;
           }
           EOF
-            zig cc -target x86_64-linux-gnu -O2 /tmp/dlprobe.c -ldl -o /tmp/dlprobe
+            zig cc -target x86_64-linux-gnu -O2 /tmp/dlprobe.c -ldl -lpthread -o /tmp/dlprobe
             LD_LIBRARY_PATH="${DL_LD_LIBRARY_PATH}" /tmp/dlprobe "dist/${LIB_OUT}-linux-x64.so"
           fi
 
