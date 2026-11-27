@@ -23,12 +23,13 @@ permissions:
   id-token: write
   attestations: write
 
-env:
-  GH_TOKEN: ${{ github.token }}
+concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: false }
+env: { GH_TOKEN: "${{ github.token }}" }
 
 jobs:
   ensure-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       release_tag: ${{ steps.resolve.outputs.release_tag }}
       versions_json: ${{ steps.resolve.outputs.versions_json }}
@@ -41,11 +42,12 @@ jobs:
         env: { TAG: "${{ inputs.release_tag || 'v11-max-5os-latest' }}" }
         run: node .github/workflows/holo-5os-tier5-shards.mts resolve
       - uses: actions/upload-artifact@v7
-        with: { name: resolved-tier5-versions, path: resolved-tier5-versions.json }
+        with: { name: resolved-tier5-versions, path: resolved-tier5-versions.json, retention-days: 7 }
 
   build-tier5-5os-shard:
     needs: ensure-release
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       max-parallel: 4
@@ -66,7 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with: { sparse-checkout: .github/workflows/ }
-      - uses: goto-bus-stop/setup-zig@v2
+      - uses: mlugg/setup-zig@v2
         with: { version: 0.14.0 }
       - uses: actions/cache@v6
         with:
@@ -84,7 +86,7 @@ jobs:
         run: node .github/workflows/holo-5os-tier5-shards.mts build
       - uses: actions/upload-artifact@v7
         if: ${{ steps.build.outputs.skipped != 'true' }}
-        with: { name: "tier5-sums-${{ matrix.lib }}", path: "dist/SHA512SUMS-${{ matrix.lib }}.txt" }
+        with: { name: "tier5-sums-${{ matrix.lib }}", path: "dist/SHA512SUMS-${{ matrix.lib }}.txt", retention-days: 7 }
       - if: ${{ steps.build.outputs.skipped != 'true' }}
         env: { TAG: "${{ needs.ensure-release.outputs.release_tag }}" }
         run: node .github/workflows/holo-workflow-runtime.mts upload
@@ -96,6 +98,7 @@ jobs:
     needs: [ensure-release, build-tier5-5os-shard]
     if: ${{ !cancelled() && needs.ensure-release.result == 'success' }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with: { sparse-checkout: .github/workflows/ }

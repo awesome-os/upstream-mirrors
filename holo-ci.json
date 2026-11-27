@@ -16,6 +16,7 @@
     "spdxLicense": true,
     "gitattributes": true,
     "codeowners": true,
-    "noWorkflowBloat": true
+    "noWorkflowBloat": true,
+    "requireWorkflowHardening": true
   }
 }

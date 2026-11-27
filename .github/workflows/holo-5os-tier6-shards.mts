@@ -427,7 +427,7 @@ exec zig c++ -target ${zigT} ${det} "\${args[@]}"
           "-DDNNL_BUILD_GRAPH=OFF",
           "-DDNNL_ENABLE_WORKLOAD=INFERENCE",
           "-DDNNL_AARCH64_USE_KAI=OFF",
-          ...(proc === "x86_64" || proc === "AMD64" ? ["-DDNNL_ENABLE_PRIMITIVE_CPU_ISA=AVX2"] : []),
+          ...(proc === "x86_64" || proc === "AMD64" ? ["-DDNNL_ENABLE_PRIMITIVE_CPU_ISA=AVX2", "-DDNNL_ENABLE_GEMM_KERNELS_ISA=AVX2"] : []),
           "-DDNNL_BUILD_TESTS=OFF",
           "-DDNNL_BUILD_EXAMPLES=OFF",
           "-DDNNL_ENABLE_JIT_PROFILING=OFF",
@@ -448,7 +448,7 @@ exec zig c++ -target ${zigT} ${det} "\${args[@]}"
         runCProbe(
           `#include <dlfcn.h>
 #include <stdio.h>
-typedef struct { int major, minor, patch; const char *hash, *cpu_runtime, *gpu_runtime; } dnnl_ver_t;
+typedef struct { int major, minor, patch; const char *hash; unsigned cpu_runtime, gpu_runtime; } dnnl_ver_t;
 int main(int argc, char **argv) {
   void *h = dlopen(argv[1], RTLD_NOW);
   if (!h) { fprintf(stderr, "%s\\n", dlerror()); return 1; }
@@ -459,7 +459,7 @@ int main(int argc, char **argv) {
   const dnnl_ver_t *v = ver_fn();
   void *eng = NULL;
   if (eng_create(&eng, 1, 0) != 0 || !eng) { fprintf(stderr, "dnnl_engine_create failed\\n"); return 3; }
-  printf("oneDNN engine OK: v%d.%d.%d (%s)\\n", v->major, v->minor, v->patch, v->cpu_runtime);
+  printf("oneDNN engine OK: v%d.%d.%d (cpu_rt=%u)\\n", v->major, v->minor, v->patch, v->cpu_runtime);
   eng_destroy(eng);
   dlclose(h);
   return 0;

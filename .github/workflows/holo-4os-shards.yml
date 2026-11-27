@@ -11,78 +11,52 @@ on:
 permissions:
   contents: write
 
+concurrency: { group: "${{ github.workflow }}-${{ github.ref }}", cancel-in-progress: false }
+env: { GH_TOKEN: "${{ github.token }}" }
+
 jobs:
   ensure-release:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            .github/workflows/
-
+        with: { sparse-checkout: .github/workflows/ }
       - uses: actions/setup-node@v7
-        with:
-          node-version: '26'
-
-      - env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release_tag || 'v0.2.0-holo-5os' }}
+        with: { node-version: '26' }
+      - env: { TAG: "${{ inputs.release_tag || 'v0.2.0-holo-5os' }}" }
         run: node .github/workflows/holo-4os-shards.mts ensure-release
 
   build-4os-shard:
     needs: ensure-release
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         engine: [brotli, expat, sqlite3, libwebp, lz4, md4c, picohttp]
     steps:
       - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            .github/workflows/
-
-      - uses: goto-bus-stop/setup-zig@v2
-        with:
-          version: 0.14.0
-
+        with: { sparse-checkout: .github/workflows/ }
+      - uses: mlugg/setup-zig@v2
+        with: { version: 0.14.0 }
       - uses: actions/setup-node@v7
-        with:
-          node-version: '26'
-
-      - name: Checkout Sparse Mirror Branch (if mirror-backed)
-        if: matrix.engine != 'sqlite3'
+        with: { node-version: '26' }
+      - if: matrix.engine != 'sqlite3'
         uses: actions/checkout@v7
-        with:
-          ref: mirror/${{ matrix.engine }}
-          path: src
-
-      - name: Compile ${{ matrix.engine }} for 5 OS Targets (Zero CMake / Zero Ninja + WASI)
-        env:
-          ENGINE: ${{ matrix.engine }}
+        with: { ref: "mirror/${{ matrix.engine }}", path: src }
+      - env: { ENGINE: "${{ matrix.engine }}" }
         run: node .github/workflows/holo-4os-shards.mts build
-
-      - name: Upload 5-OS Shard Binaries to GitHub Release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release_tag || 'v0.2.0-holo-5os' }}
-        run: gh release upload "$TAG" dist/* --repo awesome-os/upstream-mirrors --clobber
+      - env: { TAG: "${{ inputs.release_tag || 'v0.2.0-holo-5os' }}" }
+        run: node .github/workflows/holo-workflow-runtime.mts upload
 
   emit-5os-holo-manifest:
     needs: build-4os-shard
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
-        with:
-          sparse-checkout: |
-            .github/workflows/
-
+        with: { sparse-checkout: .github/workflows/ }
       - uses: actions/setup-node@v7
-        with:
-          node-version: '26'
-
-      - name: Emit Unified 5-OS Holo v11 Registry Manifest
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.release_tag || 'v0.2.0-holo-5os' }}
+        with: { node-version: '26' }
+      - env: { TAG: "${{ inputs.release_tag || 'v0.2.0-holo-5os' }}" }
         run: node .github/workflows/holo-4os-shards.mts manifest
