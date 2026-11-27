@@ -129,6 +129,9 @@ set(protobuf_WITH_ZLIB OFF CACHE BOOL "" FORCE)
 set(protobuf_INSTALL OFF CACHE BOOL "" FORCE)
 set(protobuf_ABSL_PROVIDER package CACHE STRING "" FORCE)
 set(protobuf_BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(CMAKE_CXX_VISIBILITY_PRESET default CACHE STRING "" FORCE)
+set(CMAKE_VISIBILITY_INLINES_HIDDEN OFF CACHE BOOL "" FORCE)
+add_compile_definitions(LIBPROTOBUF_EXPORTS)
 add_subdirectory(/tmp/pb_src pb_build)
 `,
         "utf8"
@@ -282,7 +285,7 @@ int main(int argc, char **argv) {
         ],
         { env: { ...process.env, CC: `${w}/cc`, CXX: `${w}/cxx` } }
       );
-      run("meson", ["compile", "-C", bdir, `-j${nproc}`, "vips"]);
+      run("meson", ["compile", "-C", bdir, `-j${nproc}`, "libvips/vips:shared_library"]);
       copyIfFound(findFirstMatch(`${bdir}/libvips`, (n) => n.startsWith("libvips.so") && !n.endsWith(".p"), 2), `dist/${libOut}-linux-x64.so`);
       smokeProbe = () => {
         runCProbe(
@@ -331,9 +334,9 @@ int main(int argc, char **argv) {
         run("cmake", ["--build", b, `-j${nproc}`]);
         return b;
       };
-      copyIfFound(findFirstMatch(buildBlas("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "SSE_GENERIC", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-x64.so`);
+      copyIfFound(findFirstMatch(buildBlas("lin_x64", "Linux", "x86_64", "x86_64-linux-gnu", "CORE2", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-x64.so`);
       copyIfFound(findFirstMatch(buildBlas("lin_arm64", "Linux", "aarch64", "aarch64-linux-gnu", "ARMV8", "-lm -s"), (n) => n.startsWith("libopenblas.so"), 3), `dist/${libOut}-linux-arm64.so`);
-      const bWin = buildBlas("win64", "Windows", "AMD64", "x86_64-windows-gnu", "SSE_GENERIC", "-Wl,--export-all-symbols -s");
+      const bWin = buildBlas("win64", "Windows", "AMD64", "x86_64-windows-gnu", "CORE2", "-Wl,--export-all-symbols -s");
       copyIfFound(findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll"), 3), `dist/${libOut}-win64.dll`);
       const imp = findFirstMatch(bWin, (n) => n.includes("openblas") && n.endsWith(".dll.a"), 3);
       if (imp) fs.copyFileSync(imp, `dist/${libOut}-win64.dll.a`);
@@ -503,7 +506,8 @@ exec zig ${tool} -target ${zigT} ${det} "\${args[@]}"
       fs.writeFileSync("/tmp/nccl_inc/cuda_bf16.h", "", "utf8");
       fs.writeFileSync(
         "/tmp/nccl_probe.c",
-        `#include <stdint.h>
+        `#include <stddef.h>
+#include <stdint.h>
 #include "nccl.h"
 #ifdef _WIN32
 #define B8G_EXP __declspec(dllexport)
@@ -513,7 +517,7 @@ exec zig ${tool} -target ${zigT} ${det} "\${args[@]}"
 B8G_EXP uint32_t b8g_nccl_abi_magic(void) { return 0x33564742u; }
 B8G_EXP uint32_t b8g_nccl_version(void) { return NCCL_VERSION_CODE; }
 B8G_EXP uint32_t b8g_nccl_unique_id_bytes(void) { return (uint32_t)sizeof(ncclUniqueId); }
-B8G_EXP ncclResult_t ncclGetVersion(int *version) { if (!version) return ncclInvalidArgument; *version = NCCL_VERSION_CODE; return ncclSuccess; }
+ncclResult_t ncclGetVersion(int *version) { if (!version) return ncclInvalidArgument; *version = NCCL_VERSION_CODE; return ncclSuccess; }
 `,
         "utf8"
       );
