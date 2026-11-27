@@ -7,6 +7,11 @@ on:
         description: 'Release tag for 5-OS shared + WASI libraries'
         required: true
         default: 'v11-max-5os-latest'
+      force_rebuild:
+        description: 'Force rebuild of all shards even if receipt matches'
+        required: false
+        type: boolean
+        default: false
   schedule:
     - cron: '0 7 * * 0'
   push:
@@ -123,18 +128,33 @@ jobs:
           - onig
           - zlib-ng
     steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows/holo-5os-tier2-shards.yml
+
       - uses: goto-bus-stop/setup-zig@v2
         with:
           version: 0.14.0
+
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/zig
+          key: ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-${{ hashFiles('.github/workflows/holo-5os-tier2-shards.yml') }}
+          restore-keys: |
+            ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-
 
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
 
       - name: Compile ${{ matrix.lib }} for 5 OS Targets via Pure Zig 0.14.0 + Smoke Test
+        id: build
         env:
           LIB_KEY: ${{ matrix.lib }}
           VERSIONS_JSON: ${{ needs.ensure-release.outputs.versions_json }}
+          RELEASE_TAG: ${{ needs.ensure-release.outputs.release_tag }}
+          FORCE_REBUILD: ${{ inputs.force_rebuild == true && 'true' || 'false' }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -145,33 +165,67 @@ jobs:
             console.log(`export UP_VER=${JSON.stringify(v.version)}`);
             console.log(`export LIB_OUT=${JSON.stringify(v.libOut)}`);
           ')"
+          echo "lib_out=${LIB_OUT}" >> "$GITHUB_OUTPUT"
+
+          if [ "${FORCE_REBUILD}" != "true" ]; then
+            ASSETS_JSON=$(gh release view "$RELEASE_TAG" --repo awesome-os/upstream-mirrors --json assets 2>/dev/null || echo '{"assets":[]}')
+            RECEIPT_NAME="${LIB_OUT}-receipt.json"
+            if node -e '
+              const assets = JSON.parse(process.argv[1]).assets || [];
+              process.exit(assets.some(a => a.name === process.argv[2]) ? 0 : 1);
+            ' "$ASSETS_JSON" "$RECEIPT_NAME"; then
+              mkdir -p /tmp/skip-check
+              if gh release download "$RELEASE_TAG" --repo awesome-os/upstream-mirrors -p "$RECEIPT_NAME" -D /tmp/skip-check --clobber >/dev/null 2>&1; then
+                if node -e '
+                  const fs = require("node:fs");
+                  const receipt = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+                  const assets = new Set((JSON.parse(process.argv[2]).assets || []).map(a => a.name));
+                  const upVer = process.argv[3];
+                  const ok = receipt &&
+                    receipt.version === upVer &&
+                    Array.isArray(receipt.artifacts) &&
+                    receipt.artifacts.length > 0 &&
+                    receipt.artifacts.every(a => a && typeof a.name === "string" && assets.has(a.name));
+                  process.exit(ok ? 0 : 1);
+                ' "/tmp/skip-check/${RECEIPT_NAME}" "$ASSETS_JSON" "$UP_VER"; then
+                  echo "skipped=true" >> "$GITHUB_OUTPUT"
+                  echo "SKIP: ${LIB_KEY} ${UP_VER} already materialized"
+                  exit 0
+                fi
+              fi
+            fi
+          fi
+          echo "skipped=false" >> "$GITHUB_OUTPUT"
+
           echo "=== Building ${LIB_KEY} (${LIB_OUT}) @ ${UP_REPO} ${UP_TAG} (${UP_VER}) ==="
 
           mkdir -p src dist
+          DET_FLAGS="-ffile-prefix-map=$PWD=."
+          DET_LINUX_FLAGS="-ffile-prefix-map=$PWD=. -Wl,--build-id=none"
 
           compile_5os_c() {
             local out="$1"; shift
-            zig cc -target x86_64-windows-gnu -O2 -shared -s "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
-            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
-            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
-            zig cc -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
-            zig cc -target wasm32-wasi        -O2 -mexec-model=reactor "$@" -o "dist/${out}-wasm32-wasi.wasm"
+            zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS "$@" -o "dist/${out}-linux-x64.so"
+            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS "$@" -o "dist/${out}-linux-arm64.so"
+            zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS "$@" -o "dist/${out}-macos-arm64.dylib"
+            zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS "$@" -o "dist/${out}-wasm32-wasi.wasm"
           }
 
           compile_4os_c() {
             local out="$1"; shift
-            zig cc -target x86_64-windows-gnu -O2 -shared -s "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
-            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
-            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
-            zig cc -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
+            zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS "$@" -o "dist/${out}-linux-x64.so"
+            zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS "$@" -o "dist/${out}-linux-arm64.so"
+            zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS "$@" -o "dist/${out}-macos-arm64.dylib"
           }
 
           compile_4os_cxx() {
             local out="$1"; shift
-            zig c++ -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
-            zig c++ -target x86_64-linux-gnu   -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-x64.so"
-            zig c++ -target aarch64-linux-gnu  -O2 -shared -fPIC -s "$@" -o "dist/${out}-linux-arm64.so"
-            zig c++ -target aarch64-macos      -O2 -shared -fPIC "$@" -o "dist/${out}-macos-arm64.dylib"
+            zig c++ -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $DET_FLAGS "$@" -o "dist/${out}-win64.dll" "-Wl,--out-implib,dist/${out}-win64.dll.a"
+            zig c++ -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS "$@" -o "dist/${out}-linux-x64.so"
+            zig c++ -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS "$@" -o "dist/${out}-linux-arm64.so"
+            zig c++ -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS "$@" -o "dist/${out}-macos-arm64.dylib"
           }
 
           clone_tag() {
@@ -182,28 +236,36 @@ jobs:
             mbedtls)
               rm -rf src && mkdir -p src
               # Mbed TLS 3.6.x LTS has a flat self-contained library/*.c layout ideal for pure Zig 0.14.0 cross-compile
-              if ! git clone --depth=1 --branch "${UP_TAG}" "https://github.com/${UP_REPO}.git" src || [ -d src/tf-psa-crypto ]; then
+              if ! git clone --depth=1 --branch "${UP_TAG}" "https://github.com/${UP_REPO}.git" src || [ -d src/tf-psa-crypto ] || [ ! -f src/library/aes.c ]; then
                 rm -rf src && mkdir -p src
                 git clone --depth=1 --branch "v3.6.8" "https://github.com/Mbed-TLS/mbedtls.git" src
               fi
+              cat > /tmp/mbed_wasi_config.h <<'EOF'
+          #include "mbedtls/mbedtls_config.h"
+          #undef MBEDTLS_HAVE_TIME
+          #undef MBEDTLS_HAVE_TIME_DATE
+          #undef MBEDTLS_NET_C
+          #undef MBEDTLS_TIMING_C
+          #define MBEDTLS_NO_PLATFORM_ENTROPY
+          EOF
               MBED_INCS="-Isrc/include -Isrc/library"
               SRCS_ALL=$(find src/library -maxdepth 1 -name '*.c' | sort)
               SRCS_NOWASI=$(echo "$SRCS_ALL" | grep -vE '/(net_sockets|timing)\.c$')
-              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $MBED_INCS $SRCS_ALL -lws2_32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $MBED_INCS -DMBEDTLS_NO_PLATFORM_ENTROPY $SRCS_NOWASI -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $DET_FLAGS $MBED_INCS $SRCS_ALL -lws2_32 -lbcrypt -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $MBED_INCS $SRCS_ALL -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS $MBED_INCS -DMBEDTLS_CONFIG_FILE='"/tmp/mbed_wasi_config.h"' $SRCS_NOWASI -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             llhttp)
               clone_tag
               SRCS=$(find src/src -maxdepth 1 -name '*.c' | sort)
-              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols -Isrc/include $SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s -Isrc/include $SRCS -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s -Isrc/include $SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC -Isrc/include $SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor -Isrc/include $SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $DET_FLAGS -Isrc/include $SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS -Isrc/include $SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS -Isrc/include $SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS -Isrc/include $SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS -Isrc/include $SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             nghttp2)
@@ -235,15 +297,15 @@ jobs:
           EOF
               NG2_SRCS="src/lib/nghttp2_pq.c src/lib/nghttp2_map.c src/lib/nghttp2_queue.c src/lib/nghttp2_frame.c src/lib/nghttp2_buf.c src/lib/nghttp2_stream.c src/lib/nghttp2_outbound_item.c src/lib/nghttp2_session.c src/lib/nghttp2_submit.c src/lib/nghttp2_helper.c src/lib/nghttp2_alpn.c src/lib/nghttp2_hd.c src/lib/nghttp2_hd_huffman.c src/lib/nghttp2_hd_huffman_data.c src/lib/nghttp2_version.c src/lib/nghttp2_priority_spec.c src/lib/nghttp2_option.c src/lib/nghttp2_callbacks.c src/lib/nghttp2_mem.c src/lib/nghttp2_http.c src/lib/nghttp2_rcbuf.c src/lib/nghttp2_extpri.c src/lib/nghttp2_ratelim.c src/lib/nghttp2_time.c src/lib/nghttp2_debug.c src/lib/sfparse.c"
               NG2_FLAGS="-I/tmp/ng2_inc -Isrc/lib/includes -Isrc/lib -DHAVE_CONFIG_H -DBUILDING_NGHTTP2"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s $NG2_FLAGS $NG2_SRCS -lws2_32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $NG2_FLAGS $NG2_SRCS -lws2_32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS $NG2_FLAGS $NG2_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             nghttp3)
-              clone_tag
+              git clone --depth=1 --recurse-submodules --shallow-submodules --branch "$UP_TAG" "https://github.com/${UP_REPO}.git" src
               mkdir -p /tmp/ng3_inc/nghttp3
               node -e '
                 const fs = require("node:fs");
@@ -340,10 +402,11 @@ jobs:
           #  define HAVE_IPHLPAPI_H 1
           #  define HAVE_NETIOAPI_H 1
           #  define HAVE_MALLOC_H 1
-          #  define HAVE_STRCMPI 1
+          #  define HAVE_STRCASECMP 1
           #  define HAVE_STRICMP 1
-          #  define HAVE_STRNCMPI 1
+          #  define HAVE_STRNCASECMP 1
           #  define HAVE_STRNICMP 1
+          #  define HAVE_STRINGS_H 1
           #  define HAVE_WINDOWS_H 1
           #  define HAVE_WINSOCK2_H 1
           #  define HAVE_WS2TCPIP_H 1
@@ -452,11 +515,11 @@ jobs:
           EOF
               CARES_SRCS=$(find src/src/lib -name '*.c' | sort)
               CARES_FLAGS="-I/tmp/cares_inc -Isrc/include -Isrc/src/lib -Isrc/src/lib/include -Isrc/src/lib/util -Isrc/src/lib/dsa -DHAVE_CONFIG_H=1 -DCARES_BUILDING_LIBRARY"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s $CARES_FLAGS $CARES_SRCS -lws2_32 -liphlpapi -ladvapi32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC $CARES_FLAGS $CARES_SRCS -framework SystemConfiguration -framework CoreFoundation -o "dist/${LIB_OUT}-macos-arm64.dylib" || \
-                zig cc -target aarch64-macos -O2 -shared -fPIC $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $CARES_FLAGS $CARES_SRCS -lws2_32 -liphlpapi -ladvapi32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $CARES_FLAGS $CARES_SRCS -framework SystemConfiguration -framework CoreFoundation -o "dist/${LIB_OUT}-macos-arm64.dylib" || \
+                zig cc -target aarch64-macos -O2 -shared -fPIC $DET_FLAGS $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
               ;;
 
             fast_float)
@@ -487,11 +550,12 @@ jobs:
               PNG_SRCS=$(find src -maxdepth 1 -name 'png*.c' ! -name 'pngtest.c' | sort)
               ZLIB_SRCS=$(find /tmp/zlib_src -maxdepth 1 -name '*.c' ! -name 'gz*.c' | sort)
               PNG_FLAGS="-Isrc -I/tmp/zlib_src -DPNG_ARM_NEON_OPT=0 -DPNG_INTEL_SSE_OPT=0"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s $PNG_FLAGS -DPNG_BUILD_DLL $PNG_SRCS $ZLIB_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $PNG_FLAGS -DPNG_BUILD_DLL $PNG_SRCS $ZLIB_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              mkdir -p /tmp/png_wasi_inc && sed '/PNG_SETJMP_SUPPORTED/d' src/pnglibconf.h > /tmp/png_wasi_inc/pnglibconf.h
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS -I/tmp/png_wasi_inc $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             giflib)
@@ -501,11 +565,11 @@ jobs:
               fi
               tar -xzf /tmp/gif/giflib.tar.gz -C src --strip-components=1
               GIF_SRCS="src/dgif_lib.c src/egif_lib.c src/gif_err.c src/gif_font.c src/gif_hash.c src/gifalloc.c src/openbsd-reallocarray.c src/quantize.c"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $DET_FLAGS -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS -Isrc $GIF_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             freetype)
@@ -523,13 +587,13 @@ jobs:
           FT_USE_MODULE( FT_Renderer_Class, ft_smooth_renderer_class )
           FT_USE_MODULE( FT_Module_Class, sfnt_module_class )
           EOF
-              FT_SRCS="src/src/base/ftbase.c src/src/base/ftinit.c src/src/base/ftsystem.c src/src/base/ftdebug.c src/src/truetype/truetype.c src/src/sfnt/sfnt.c src/src/smooth/smooth.c src/src/autofit/autofit.c src/src/cff/cff.c src/src/cid/type1cid.c src/src/psaux/psaux.c src/src/psnames/psnames.c src/src/pshinter/pshinter.c src/src/raster/raster.c"
+              FT_SRCS="src/src/base/ftbase.c src/src/base/ftinit.c src/src/base/ftsystem.c src/src/base/ftdebug.c src/src/base/ftbitmap.c src/src/base/ftmm.c src/src/gzip/ftgzip.c src/src/base/ftglyph.c src/src/base/ftstroke.c src/src/base/ftbbox.c src/src/truetype/truetype.c src/src/sfnt/sfnt.c src/src/smooth/smooth.c src/src/autofit/autofit.c src/src/cff/cff.c src/src/cid/type1cid.c src/src/psaux/psaux.c src/src/psnames/psnames.c src/src/pshinter/pshinter.c src/src/raster/raster.c"
               FT_FLAGS="-I/tmp/ft_inc -Isrc/include -DFT2_BUILD_LIBRARY"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s $FT_FLAGS -DDLL_EXPORT $FT_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $FT_FLAGS -DDLL_EXPORT $FT_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             harfbuzz)
@@ -579,11 +643,11 @@ jobs:
           EOF
               ONIG_SRCS="src/src/regparse.c src/src/regcomp.c src/src/regexec.c src/src/regenc.c src/src/regerror.c src/src/regext.c src/src/regsyntax.c src/src/regtrav.c src/src/regversion.c src/src/st.c src/src/reggnu.c src/src/unicode.c src/src/unicode_unfold_key.c src/src/unicode_fold1_key.c src/src/unicode_fold2_key.c src/src/unicode_fold3_key.c src/src/ascii.c src/src/utf8.c src/src/utf16_be.c src/src/utf16_le.c src/src/utf32_be.c src/src/utf32_le.c src/src/euc_jp.c src/src/euc_jp_prop.c src/src/sjis.c src/src/sjis_prop.c src/src/iso8859_1.c src/src/iso8859_2.c src/src/iso8859_3.c src/src/iso8859_4.c src/src/iso8859_5.c src/src/iso8859_6.c src/src/iso8859_7.c src/src/iso8859_8.c src/src/iso8859_9.c src/src/iso8859_10.c src/src/iso8859_11.c src/src/iso8859_13.c src/src/iso8859_14.c src/src/iso8859_15.c src/src/iso8859_16.c src/src/euc_tw.c src/src/euc_kr.c src/src/big5.c src/src/gb18030.c src/src/koi8_r.c src/src/cp1251.c src/src/onig_init.c"
               ONIG_FLAGS="-I/tmp/onig_inc -Isrc/src -DHAVE_CONFIG_H"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s -Wl,--export-all-symbols $DET_FLAGS $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS $ONIG_FLAGS $ONIG_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             zlib-ng)
@@ -597,11 +661,11 @@ jobs:
               sed -e 's/@ZLIB_SYMBOL_PREFIX@//g' -e 's/#cmakedefine HAVE_UNISTD_H/#ifndef _WIN32\n#define HAVE_UNISTD_H 1\n#endif/' -e 's/#cmakedefine HAVE_STDARG_H/#define HAVE_STDARG_H 1/' -e 's/#cmakedefine Z_HAVE_UNISTD_H/#ifndef _WIN32\n#define Z_HAVE_UNISTD_H 1\n#endif/' src/zconf-ng.h.in > /tmp/zng_inc/zconf-ng.h
               ZNG_SRCS="src/adler32.c src/compress.c src/crc32.c src/crc32_braid_comb.c src/deflate.c src/deflate_fast.c src/deflate_huff.c src/deflate_medium.c src/deflate_quick.c src/deflate_rle.c src/deflate_slow.c src/deflate_stored.c src/functable.c src/infback.c src/inflate.c src/inftrees.c src/insert_string.c src/insert_string_roll.c src/trees.c src/uncompr.c src/zutil.c src/cpu_features.c src/arch/generic/adler32_c.c src/arch/generic/adler32_fold_c.c src/arch/generic/chunkset_c.c src/arch/generic/compare256_c.c src/arch/generic/crc32_braid_c.c src/arch/generic/crc32_fold_c.c src/arch/generic/slide_hash_c.c src/arch/generic/crc32_chorba_c.c"
               ZNG_FLAGS="-std=c11 -I/tmp/zng_inc -Isrc -Isrc/arch/generic -DZLIB_COMPAT -DHAVE_BUILTIN_CTZ -DHAVE_BUILTIN_CTZLL"
-              zig cc -target x86_64-windows-gnu -O2 -shared -s $ZNG_FLAGS -DZLIB_DLL -DZLIB_INTERNAL $ZNG_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
-              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
-              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $ZNG_FLAGS -DZLIB_DLL $ZNG_SRCS -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS $ZNG_FLAGS -DHAVE_UNISTD_H $ZNG_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
           esac
 
@@ -644,18 +708,57 @@ jobs:
           fi
 
           (cd dist && sha512sum * > "SHA512SUMS-${LIB_KEY}.txt")
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const crypto = require("node:crypto");
+            const distDir = "dist";
+            const files = fs.readdirSync(distDir)
+              .filter(f => /\.(dll|so|dylib|wasm|dll\.a)$/.test(f))
+              .sort();
+            const artifacts = files.map(name => {
+              const buf = fs.readFileSync(path.join(distDir, name));
+              return {
+                name,
+                size: buf.length,
+                sha512: crypto.createHash("sha512").update(buf).digest("hex")
+              };
+            });
+            const receipt = {
+              schema: "holo-v11.shard-receipt.v1",
+              pkg: process.env.LIB_KEY,
+              libOut: process.env.LIB_OUT,
+              repo: process.env.UP_REPO,
+              tag: process.env.UP_TAG,
+              version: process.env.UP_VER,
+              deterministic: true,
+              artifacts
+            };
+            fs.writeFileSync(
+              path.join(distDir, `${process.env.LIB_OUT}-receipt.json`),
+              JSON.stringify(receipt, null, 2) + "\n"
+            );
+          '
           ls -lh dist/
 
       - uses: actions/upload-artifact@v4
+        if: ${{ steps.build.outputs.skipped != 'true' }}
         with:
           name: tier2-sums-${{ matrix.lib }}
           path: dist/SHA512SUMS-${{ matrix.lib }}.txt
 
-      - name: Upload Tier-2 5-OS Shard Binaries to GitHub Release
+      - name: Upload Tier-2 5-OS Shard Binaries & Receipt to GitHub Release
+        if: ${{ steps.build.outputs.skipped != 'true' }}
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.ensure-release.outputs.release_tag }}
         run: gh release upload "$TAG" dist/* --repo awesome-os/upstream-mirrors --clobber
+
+      - name: Attest SLSA Build Provenance for ${{ matrix.lib }} Shard & Receipt
+        if: ${{ steps.build.outputs.skipped != 'true' }}
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/*'
 
   finalize-tier2-sums:
     needs: [ensure-release, build-tier2-5os-shard]

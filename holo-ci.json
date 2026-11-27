@@ -3,7 +3,8 @@
   "name": "upstream-mirrors",
   "kind": "control-plane",
   "tests": [
-    "node -e \"const fs=require('node:fs'); const idx=JSON.parse(fs.readFileSync('mirror-index.json','utf8')); const l=JSON.parse(fs.readFileSync('holo-compiler-lockfile.json','utf8')); if(!Array.isArray(idx.mirrors)||idx.mirrors.length===0||l.abiMagic!=='0x33564742') process.exit(1)\""
+    "node -e \"const fs=require('node:fs'); const idx=JSON.parse(fs.readFileSync('mirror-index.json','utf8')); const l=JSON.parse(fs.readFileSync('holo-compiler-lockfile.json','utf8')); if(!Array.isArray(idx.mirrors)||idx.mirrors.length===0||l.abiMagic!=='0x33564742') process.exit(1)\"",
+    "node --test scripts/test-5os-recipe.test.mts"
   ],
   "docs": [
     "README.md",
