@@ -133,7 +133,7 @@ jobs:
         with:
           version: 0.14.0
 
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: ~/.cache/zig
           key: ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-${{ hashFiles('.github/workflows/holo-5os-tier4-shards.yml') }}
