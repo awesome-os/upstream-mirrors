@@ -1,0 +1,22 @@
+{
+  "schema": "holo-boundary.v1",
+  "plane": 1,
+  "includePaths": [
+    "scripts"
+  ],
+  "publicEntrypoints": [
+    "mirror-index.json",
+    "holo-compiler-lockfile.json",
+    "scripts/test-5os-recipe.mts"
+  ],
+  "forbiddenImports": [
+    "WidevineCdm",
+    "optimization_guide_internal",
+    "GoogleUpdate"
+  ],
+  "maxParentTraversals": 4,
+  "scanSourceHttpIpc": false,
+  "abiGoldenFiles": [
+    "holo-compiler-lockfile.json"
+  ]
+}

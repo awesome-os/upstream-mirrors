@@ -318,7 +318,11 @@ jobs:
               '
               NG3_SRCS="$(find src/lib -maxdepth 1 -name 'nghttp3_*.c' | sort) src/lib/sfparse/sfparse.c"
               NG3_FLAGS="-I/tmp/ng3_inc -Isrc/lib/includes -Isrc/lib -Isrc/lib/sfparse -DBUILDING_NGHTTP3"
-              compile_5os_c "$LIB_OUT" $NG3_FLAGS $NG3_SRCS
+              zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS -DHAVE_WINSOCK2_H=1 $NG3_FLAGS $NG3_SRCS -lws2_32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
+              zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS -DHAVE_ARPA_INET_H=1 -DHAVE_NETINET_IN_H=1 $NG3_FLAGS $NG3_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
+              zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS -DHAVE_ARPA_INET_H=1 -DHAVE_NETINET_IN_H=1 $NG3_FLAGS $NG3_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS -DHAVE_ARPA_INET_H=1 -DHAVE_NETINET_IN_H=1 $NG3_FLAGS $NG3_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS -DHAVE_ARPA_INET_H=1 -DHAVE_NETINET_IN_H=1 $NG3_FLAGS $NG3_SRCS -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             c-ares)
@@ -513,13 +517,19 @@ jobs:
           #define GETSERVBYNAME_R_ARGS 6
           #endif
           EOF
+              cat > /tmp/cares_apple_stub.c <<'EOF'
+          #include "ares_private.h"
+          ares_status_t ares_init_sysconfig_macos(const ares_channel_t *channel, ares_sysconfig_t *sysconfig) {
+            return ares_init_sysconfig_files(channel, sysconfig, ARES_TRUE);
+          }
+          EOF
               CARES_SRCS=$(find src/src/lib -name '*.c' | sort)
+              CARES_MAC_SRCS="$(find src/src/lib -name '*.c' ! -name 'ares_sysconfig_mac.c' | sort) /tmp/cares_apple_stub.c"
               CARES_FLAGS="-I/tmp/cares_inc -Isrc/include -Isrc/src/lib -Isrc/src/lib/include -Isrc/src/lib/util -Isrc/src/lib/dsa -DHAVE_CONFIG_H=1 -DCARES_BUILDING_LIBRARY"
               zig cc -target x86_64-windows-gnu -O2 -shared -s $DET_FLAGS $CARES_FLAGS $CARES_SRCS -lws2_32 -liphlpapi -ladvapi32 -o "dist/${LIB_OUT}-win64.dll" "-Wl,--out-implib,dist/${LIB_OUT}-win64.dll.a"
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-linux-arm64.so"
-              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $CARES_FLAGS $CARES_SRCS -framework SystemConfiguration -framework CoreFoundation -o "dist/${LIB_OUT}-macos-arm64.dylib" || \
-                zig cc -target aarch64-macos -O2 -shared -fPIC $DET_FLAGS $CARES_FLAGS $CARES_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
+              zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $CARES_FLAGS $CARES_MAC_SRCS -o "dist/${LIB_OUT}-macos-arm64.dylib"
               ;;
 
             fast_float)
@@ -554,8 +564,8 @@ jobs:
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-linux-arm64.so"
               zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              mkdir -p /tmp/png_wasi_inc && sed '/PNG_SETJMP_SUPPORTED/d' src/pnglibconf.h > /tmp/png_wasi_inc/pnglibconf.h
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS -I/tmp/png_wasi_inc $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              sed -i -E '/PNG_SETJMP_SUPPORTED|PNG_SIMPLIFIED_READ_SUPPORTED|PNG_SIMPLIFIED_WRITE_SUPPORTED/d' src/pnglibconf.h
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS $PNG_FLAGS $PNG_SRCS $ZLIB_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             giflib)
@@ -593,7 +603,16 @@ jobs:
               zig cc -target x86_64-linux-gnu   -O2 -shared -fPIC -s $DET_LINUX_FLAGS $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-x64.so"
               zig cc -target aarch64-linux-gnu  -O2 -shared -fPIC -s $DET_LINUX_FLAGS $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-linux-arm64.so"
               zig cc -target aarch64-macos      -O2 -shared -fPIC $DET_FLAGS $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-macos-arm64.dylib"
-              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
+              mkdir -p /tmp/ft_wasi_inc
+              cat > /tmp/ft_wasi_inc/setjmp.h <<'EOF'
+          #ifndef _FT_WASI_SETJMP_H
+          #define _FT_WASI_SETJMP_H
+          typedef int jmp_buf[1];
+          #define setjmp(b) 0
+          #define longjmp(b,v) __builtin_trap()
+          #endif
+          EOF
+              zig cc -target wasm32-wasi        -O2 -mexec-model=reactor $DET_FLAGS -I/tmp/ft_wasi_inc $FT_FLAGS $FT_SRCS -lm -o "dist/${LIB_OUT}-wasm32-wasi.wasm"
               ;;
 
             harfbuzz)

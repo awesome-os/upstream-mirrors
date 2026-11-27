@@ -19,6 +19,17 @@ export const EXPECTED_TIER2_LIBS = [
   "zlib-ng",
 ] as const;
 
+export const EXPECTED_TIER3_LIBS = [
+  "pixman",
+  "libjpeg-turbo",
+  "libffi",
+  "ngtcp2",
+  "libxml2",
+  "libxslt",
+  "woff2",
+  "libarchive",
+] as const;
+
 export const FIVE_OS_TARGETS = [
   { target: "x86_64-windows-gnu", ext: "win64.dll", kind: "shared" },
   { target: "x86_64-linux-gnu", ext: "linux-x64.so", kind: "linux-shared" },
@@ -177,8 +188,12 @@ export function validateTier2Workflow(workflowPath: string): WorkflowValidationR
   }
 
   const ng3Block = extractCaseBlock(yml, "nghttp3");
-  if (!ng3Block.includes("--recurse-submodules --shallow-submodules")) {
-    throw new Error("nghttp3 shard missing --recurse-submodules --shallow-submodules");
+  if (
+    !ng3Block.includes("--recurse-submodules --shallow-submodules") ||
+    !ng3Block.includes("-DHAVE_WINSOCK2_H=1") ||
+    !ng3Block.includes("-DHAVE_ARPA_INET_H=1 -DHAVE_NETINET_IN_H=1")
+  ) {
+    throw new Error("nghttp3 shard missing --recurse-submodules or platform endian/net headers");
   }
 
   const caresBlock = extractCaseBlock(yml, "c-ares");
@@ -189,17 +204,18 @@ export function validateTier2Workflow(workflowPath: string): WorkflowValidationR
     caresWin32.includes("HAVE_STRNCMPI") ||
     !caresWin32.includes("HAVE_STRCASECMP 1") ||
     !caresWin32.includes("HAVE_STRNCASECMP 1") ||
-    !caresWin32.includes("HAVE_STRINGS_H 1")
+    !caresWin32.includes("HAVE_STRINGS_H 1") ||
+    !caresBlock.includes("cares_apple_stub.c") ||
+    !caresBlock.includes("! -name 'ares_sysconfig_mac.c'")
   ) {
-    throw new Error("c-ares shard _WIN32 config block is invalid");
+    throw new Error("c-ares shard _WIN32 config or macOS sysconfig stub is invalid");
   }
 
   const pngBlock = extractCaseBlock(yml, "libpng");
   if (
-    !pngBlock.includes("sed '/PNG_SETJMP_SUPPORTED/d' src/pnglibconf.h > /tmp/png_wasi_inc/pnglibconf.h") ||
-    !pngBlock.includes("-I/tmp/png_wasi_inc $PNG_FLAGS")
+    !pngBlock.includes("sed -i -E '/PNG_SETJMP_SUPPORTED|PNG_SIMPLIFIED_READ_SUPPORTED|PNG_SIMPLIFIED_WRITE_SUPPORTED/d' src/pnglibconf.h")
   ) {
-    throw new Error("libpng shard missing WASI pnglibconf.h override");
+    throw new Error("libpng shard missing in-place WASI pnglibconf.h setjmp/simplified removal");
   }
 
   const ftBlock = extractCaseBlock(yml, "freetype");
@@ -210,6 +226,8 @@ export function validateTier2Workflow(workflowPath: string): WorkflowValidationR
     "src/src/base/ftglyph.c",
     "src/src/base/ftstroke.c",
     "src/src/base/ftbbox.c",
+    "/tmp/ft_wasi_inc/setjmp.h",
+    "-I/tmp/ft_wasi_inc $FT_FLAGS",
   ]) {
     if (!ftBlock.includes(extraSrc)) {
       throw new Error(`freetype shard missing ${extraSrc}`);
@@ -230,6 +248,99 @@ export function validateTier2Workflow(workflowPath: string): WorkflowValidationR
     hasReceiptEmission,
     hasPerShardSlsa,
     repairedShards: ["mbedtls", "nghttp3", "c-ares", "libpng", "freetype", "zlib-ng"],
+  };
+}
+
+export function validateTier3Workflow(workflowPath: string): WorkflowValidationResult {
+  const yml = fs.readFileSync(workflowPath, "utf8");
+  const matrixLibs = extractMatrixLibs(yml);
+
+  if (matrixLibs.length !== EXPECTED_TIER3_LIBS.length) {
+    throw new Error(`Expected ${EXPECTED_TIER3_LIBS.length} Tier-3 matrix libs, found ${matrixLibs.length}`);
+  }
+  for (const lib of EXPECTED_TIER3_LIBS) {
+    if (!matrixLibs.includes(lib)) {
+      throw new Error(`Missing Tier-3 matrix lib: ${lib}`);
+    }
+  }
+
+  const hasForceRebuildInput =
+    /force_rebuild:\s*\r?\n[\s\S]*?type:\s*boolean\s*\r?\n\s*default:\s*false/.test(yml);
+  if (!hasForceRebuildInput) {
+    throw new Error("Tier-3 missing workflow_dispatch.inputs.force_rebuild (type: boolean, default: false)");
+  }
+
+  const hasZigCache =
+    yml.includes("uses: actions/cache@v4") &&
+    yml.includes("path: ~/.cache/zig") &&
+    yml.includes("key: ${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-${{ hashFiles('.github/workflows/holo-5os-tier3-shards.yml') }}") &&
+    yml.includes("${{ runner.os }}-zig-0.14.0-${{ matrix.lib }}-");
+  if (!hasZigCache) {
+    throw new Error("Tier-3 missing actions/cache@v4 configuration for ~/.cache/zig");
+  }
+
+  const hasSkipFastPath =
+    yml.includes("SKIP: ${LIB_KEY} ${UP_VER} already materialized") &&
+    yml.includes("skipped=true") &&
+    yml.includes("steps.build.outputs.skipped != 'true'");
+  if (!hasSkipFastPath) {
+    throw new Error("Tier-3 missing skip-unchanged-shard check or skipped != 'true' guards");
+  }
+
+  const hasDeterministicFlags =
+    yml.includes("-ffile-prefix-map=$PWD=.") &&
+    yml.includes("-Wl,--build-id=none");
+  if (!hasDeterministicFlags) {
+    throw new Error("Tier-3 missing deterministic compiler flags (-ffile-prefix-map=$PWD=. / -Wl,--build-id=none)");
+  }
+
+  const zigLines = yml
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^zig c(\+\+|c)\s+-target\s+/.test(line) && !line.includes("/tmp/dlprobe.c"));
+  for (const line of zigLines) {
+    const isLinux = line.includes("linux-gnu");
+    if (isLinux && !line.includes("$DET_LINUX_FLAGS")) {
+      throw new Error(`Tier-3 Linux zig invocation missing $DET_LINUX_FLAGS: ${line}`);
+    }
+    if (!isLinux && !line.includes("$DET_FLAGS")) {
+      throw new Error(`Tier-3 Non-Linux zig invocation missing $DET_FLAGS: ${line}`);
+    }
+  }
+
+  const hasReceiptEmission =
+    yml.includes("holo-v11.shard-receipt.v1") &&
+    yml.includes("${process.env.LIB_OUT}-receipt.json") &&
+    yml.includes("gh release upload \"$TAG\" dist/* --repo awesome-os/upstream-mirrors --clobber") &&
+    yml.includes("WebAssembly.validate(buf)");
+  if (!hasReceiptEmission) {
+    throw new Error("Tier-3 missing canonical per-shard receipt generation, release upload, or WebAssembly.validate");
+  }
+
+  const hasPerShardSlsa =
+    /if:\s*\$\{\{\s*steps\.build\.outputs\.skipped\s*!=\s*'true'\s*\}\}[\s\S]*?uses:\s*actions\/attest-build-provenance@v2/.test(
+      yml
+    );
+  if (!hasPerShardSlsa) {
+    throw new Error("Tier-3 missing guarded per-shard actions/attest-build-provenance@v2 step");
+  }
+
+  for (const lib of EXPECTED_TIER3_LIBS) {
+    const block = extractCaseBlock(yml, lib);
+    if (!block) {
+      throw new Error(`Tier-3 missing case block for ${lib}`);
+    }
+  }
+
+  return {
+    matrixLibs,
+    hasForceRebuildInput,
+    hasZigCache,
+    hasSkipFastPath,
+    hasDeterministicFlags,
+    hasReceiptEmission,
+    hasPerShardSlsa,
+    repairedShards: [...EXPECTED_TIER3_LIBS],
   };
 }
 
